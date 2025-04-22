@@ -103,11 +103,7 @@ def whatsapp_webhook():
             hoja = crear_hoja_del_dia(dia_orden)
             hoja.append_row(["Orden médica", pacientes[telefono]["nombre"], telefono, "", "", pacientes[telefono]["cobertura"], pacientes[telefono]["afiliado"], texto_ocr, resultado])
             pacientes[telefono]["estado"] = "completo"
-            return responder_whatsapp(f"Gracias. Estas son tus indicaciones:
-
-{resultado}
-
-¡Te esperamos!")
+            return responder_whatsapp(f"Gracias. Estas son tus indicaciones:\n\n{resultado}\n\n¡Te esperamos!")
 
     return responder_whatsapp("Disculpá, no entendí tu mensaje. Podés decir 'sede' o 'domicilio' para comenzar.")
 
