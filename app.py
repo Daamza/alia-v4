@@ -91,9 +91,8 @@ def whatsapp_webhook():
             image = Image.open(io.BytesIO(imagen_res.content))
             texto_ocr = pytesseract.image_to_string(image)
 
-            prompt = f"Analizá esta orden médica:
-{texto_ocr}
-Extraé: estudios, cobertura, número de afiliado e indicaciones específicas."
+            prompt = f"Analizá esta orden médica:\n{texto_ocr}\nExtraé: estudios, cobertura, número de afiliado e indicaciones específicas."
+
             completion = openai.ChatCompletion.create(
                 model="gpt-4",
                 messages=[{"role": "user", "content": prompt}]
