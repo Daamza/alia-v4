@@ -1,0 +1,8 @@
+Flask==2.2.5
+pytesseract
+Pillow
+openai
+gspread
+oauth2client
+gunicorn
+python-dotenv
