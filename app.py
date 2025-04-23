@@ -48,11 +48,9 @@ def whatsapp_webhook():
     if telefono not in pacientes:
         pacientes[telefono] = {}
 
-    # INICIO DE FLUJO
     if "hola" in mensaje:
         return responder_whatsapp("Hola!!! soy ALIA, ¿en qué puedo ayudarte hoy?")
 
-    # OPCIÓN SEDE CON PEDIDO DE ORDEN
     elif "sede" in mensaje:
         pacientes[telefono] = {
             "nombre": "Paciente sede",
@@ -67,7 +65,6 @@ def whatsapp_webhook():
         hoja.append_row([str(datetime.now()), "Paciente sede", telefono, "", "sede", "Desconocida", "No aplica", "", "Pendiente"])
         return responder_whatsapp("Perfecto. Para continuar, por favor envianos una foto de la orden médica.")
 
-    # OPCIÓN DOMICILIO
     elif "domicilio" in mensaje:
         pacientes[telefono]["estado"] = "esperando_datos"
         return responder_whatsapp("Perfecto. Por favor, indicame: Nombre completo, Dirección, Localidad, Cobertura y Número de Afiliado (todo en un solo mensaje separado por comas).")
@@ -90,17 +87,22 @@ def whatsapp_webhook():
             return responder_whatsapp(f"¡Gracias {partes[0].strip()}! Agendamos tu turno para el día {dia_turno} entre las 08:00 y las 11:00 hs. ¿Podés enviarnos una foto de la orden médica?")
         return responder_whatsapp("Faltan datos. Por favor escribí: Nombre, Dirección, Localidad, Cobertura, Afiliado (todo separado por comas).")
 
-    # RECEPCIÓN DE ORDEN MÉDICA
     elif pacientes[telefono].get("estado") == "esperando_orden" and request.form.get("NumMedia") == "1":
         media_url = request.form.get("MediaUrl0")
         image_response = requests.get(media_url, auth=(os.getenv("TWILIO_ACCOUNT_SID"), os.getenv("TWILIO_AUTH_TOKEN")))
         image_base64 = base64.b64encode(image_response.content).decode()
         ocr_response = requests.post("https://ac3de3b5-ecb9-4533-b47b-c9584c2f3ebb-00-108cgevcukjoj.worf.replit.dev/ocr", json={"image_base64": image_base64})
-        texto_ocr = ocr_response.json().get("text", "")
+
+        if ocr_response.ok:
+            try:
+                texto_ocr = ocr_response.json().get("text", "")
+            except json.JSONDecodeError:
+                return responder_whatsapp("Hubo un problema con el servicio de OCR. ¿Podés intentar enviar la imagen de nuevo?")
+        else:
+            return responder_whatsapp("No pudimos conectar con el servicio OCR. Intentá más tarde.")
 
         prompt = f"Analizá esta orden médica:\n{texto_ocr}\nExtraé: estudios, cobertura, número de afiliado e indicaciones específicas."
-        client = openai.OpenAI()
-        response = client.chat.completions.create(
+        response = openai.chat.completions.create(
             model="gpt-4",
             messages=[{"role": "user", "content": prompt}]
         )
@@ -110,9 +112,9 @@ def whatsapp_webhook():
         pacientes[telefono]["estado"] = "completo"
         return responder_whatsapp(f"Gracias. Estas son tus indicaciones:\n\n{resultado}\n\n¡Te esperamos!")
 
-    # FALLBACK GPT PARA MENSAJES INDEFINIDOS
+    # Fallback GPT
     else:
-        prompt_fallback = f"Mensaje recibido: {mensaje}\nRespondé como asistente de laboratorio."
+        prompt_fallback = f"Mensaje recibido de paciente: {mensaje}\nRespondé como asistente de laboratorio clínico."
         response = openai.chat.completions.create(
             model="gpt-4",
             messages=[{"role": "user", "content": prompt_fallback}]
