@@ -1,4 +1,3 @@
-
 from flask import Flask, request, Response
 import openai
 import gspread
@@ -48,13 +47,31 @@ def whatsapp_webhook():
     telefono = request.form.get("From", "")
     if telefono not in pacientes:
         pacientes[telefono] = {}
+
+    # INICIO DE FLUJO
     if "hola" in mensaje:
         return responder_whatsapp("Hola!!! soy ALIA, ¿en qué puedo ayudarte hoy?")
+
+    # OPCIÓN SEDE CON PEDIDO DE ORDEN
     elif "sede" in mensaje:
-        return responder_whatsapp("Podés acercarte a cualquiera de nuestras sedes sin turno en el horario de 07:30hrs a 11:00hrs para extracciones de sangre, y de 07:30hrs a 17:00hrs para entrega de informes y recepción de muestras.")
+        pacientes[telefono] = {
+            "nombre": "Paciente sede",
+            "direccion": "",
+            "localidad": "sede",
+            "cobertura": "Desconocida",
+            "afiliado": "No aplica",
+            "estado": "esperando_orden",
+            "dia": datetime.today().strftime("%A")
+        }
+        hoja = crear_hoja_del_dia(pacientes[telefono]["dia"])
+        hoja.append_row([str(datetime.now()), "Paciente sede", telefono, "", "sede", "Desconocida", "No aplica", "", "Pendiente"])
+        return responder_whatsapp("Perfecto. Para continuar, por favor envianos una foto de la orden médica.")
+
+    # OPCIÓN DOMICILIO
     elif "domicilio" in mensaje:
         pacientes[telefono]["estado"] = "esperando_datos"
         return responder_whatsapp("Perfecto. Por favor, indicame: Nombre completo, Dirección, Localidad, Cobertura y Número de Afiliado (todo en un solo mensaje separado por comas).")
+
     elif pacientes[telefono].get("estado") == "esperando_datos":
         partes = mensaje.split(",")
         if len(partes) >= 5:
@@ -72,6 +89,8 @@ def whatsapp_webhook():
             hoja.append_row([str(datetime.now()), partes[0].strip(), telefono, partes[1].strip(), partes[2].strip(), partes[3].strip(), partes[4].strip(), "", "Pendiente"])
             return responder_whatsapp(f"¡Gracias {partes[0].strip()}! Agendamos tu turno para el día {dia_turno} entre las 08:00 y las 11:00 hs. ¿Podés enviarnos una foto de la orden médica?")
         return responder_whatsapp("Faltan datos. Por favor escribí: Nombre, Dirección, Localidad, Cobertura, Afiliado (todo separado por comas).")
+
+    # RECEPCIÓN DE ORDEN MÉDICA
     elif pacientes[telefono].get("estado") == "esperando_orden" and request.form.get("NumMedia") == "1":
         media_url = request.form.get("MediaUrl0")
         image_response = requests.get(media_url, auth=(os.getenv("TWILIO_ACCOUNT_SID"), os.getenv("TWILIO_AUTH_TOKEN")))
@@ -80,18 +99,26 @@ def whatsapp_webhook():
         texto_ocr = ocr_response.json().get("text", "")
 
         prompt = f"Analizá esta orden médica:\n{texto_ocr}\nExtraé: estudios, cobertura, número de afiliado e indicaciones específicas."
-        from openai import OpenAI
-        client = OpenAI()
+        client = openai.OpenAI()
         response = client.chat.completions.create(
             model="gpt-4",
             messages=[{"role": "user", "content": prompt}]
         )
         resultado = response.choices[0].message.content
         hoja = crear_hoja_del_dia(pacientes[telefono]["dia"])
-        hoja.append_row(["Orden médica", pacientes[telefono]["nombre"], telefono, "", "", pacientes[telefono]["cobertura"], pacientes[telefono]["afiliado"], texto_ocr, resultado])
+        hoja.append_row(["Orden médica", pacientes[telefono]["nombre"], telefono, pacientes[telefono].get("direccion", ""), pacientes[telefono].get("localidad", ""), pacientes[telefono].get("cobertura", ""), pacientes[telefono].get("afiliado", ""), texto_ocr, resultado])
         pacientes[telefono]["estado"] = "completo"
         return responder_whatsapp(f"Gracias. Estas son tus indicaciones:\n\n{resultado}\n\n¡Te esperamos!")
-    return responder_whatsapp("Disculpá, no entendí tu mensaje. Podés decir 'sede' o 'domicilio' para comenzar.")
+
+    # FALLBACK GPT PARA MENSAJES INDEFINIDOS
+    else:
+        prompt_fallback = f"Mensaje recibido: {mensaje}\nRespondé como asistente de laboratorio."
+        response = openai.chat.completions.create(
+            model="gpt-4",
+            messages=[{"role": "user", "content": prompt_fallback}]
+        )
+        texto = response.choices[0].message.content.strip()
+        return responder_whatsapp(texto)
 
 if __name__ == "__main__":
     app.run()
