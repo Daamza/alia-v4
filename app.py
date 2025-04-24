@@ -91,7 +91,7 @@ def whatsapp_webhook():
         media_url = request.form.get("MediaUrl0")
         image_response = requests.get(media_url, auth=(os.getenv("TWILIO_ACCOUNT_SID"), os.getenv("TWILIO_AUTH_TOKEN")))
         image_base64 = base64.b64encode(image_response.content).decode()
-        ocr_response = requests.post("https://ac3de3b5-ecb9-4533-b47b-c9584c2f3ebb-00-108cgevcukjoj.worf.replit.dev/ocr", json={"image_base64": image_base64})
+        ocr_response = requests.post("https://ocr-microsistema.onrender.com", json={"image_base64": image_base64})
 
         if ocr_response.ok:
             try:
