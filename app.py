@@ -21,7 +21,7 @@ def crear_hoja_del_dia(dia):
         hoja = client.open(f"Turnos_{dia}").sheet1
     except:
         hoja = client.create(f"Turnos_{dia}").sheet1
-        hoja.append_row(["Fecha", "Nombre", "Teléfono", "Dirección", "Localidad", "Cobertura", "Afiliado", "Estudios", "Indicaciones"])
+        hoja.append_row(["Fecha", "Nombre", "Teléfono", "Dirección", "Localidad", "Fecha de Nacimiento", "Cobertura", "Afiliado", "Estudios", "Indicaciones"])
     return hoja
 
 def determinar_dia_turno(localidad):
@@ -37,6 +37,15 @@ def determinar_dia_turno(localidad):
     else:
         return "Lunes"
 
+def calcular_edad(fecha_nacimiento):
+    try:
+        fecha = datetime.strptime(fecha_nacimiento, "%d/%m/%Y")
+        hoy = datetime.today()
+        edad = hoy.year - fecha.year - ((hoy.month, hoy.day) < (fecha.month, fecha.day))
+        return edad
+    except:
+        return None
+
 def responder_whatsapp(mensaje):
     xml = f'<?xml version="1.0" encoding="UTF-8"?><Response><Message>{mensaje}</Message></Response>'
     return Response(xml, mimetype='application/xml')
@@ -45,47 +54,66 @@ def responder_whatsapp(mensaje):
 def whatsapp_webhook():
     mensaje = request.form.get("Body", "").lower()
     telefono = request.form.get("From", "")
+    
     if telefono not in pacientes:
         pacientes[telefono] = {}
 
+    # Derivación automática si el paciente escribe "asistente"
+    if "asistente" in mensaje:
+        return responder_whatsapp("Te estamos derivando a un operador humano. Comunicate al +54 9 11 xxxx xxxx.")
+
+    # Inicio de conversación
     if "hola" in mensaje:
-        return responder_whatsapp("Hola!!! soy ALIA, ¿en qué puedo ayudarte hoy?")
+        return responder_whatsapp("Hola!!! soy ALIA, ¿en qué puedo ayudarte hoy?\nRecordá que si necesitás ayuda humana podés escribir ASISTENTE en cualquier momento.")
 
     elif "sede" in mensaje:
         pacientes[telefono] = {
             "nombre": "Paciente sede",
             "direccion": "",
             "localidad": "sede",
+            "fecha_nacimiento": "",
             "cobertura": "Desconocida",
             "afiliado": "No aplica",
             "estado": "esperando_orden",
             "dia": datetime.today().strftime("%A")
         }
         hoja = crear_hoja_del_dia(pacientes[telefono]["dia"])
-        hoja.append_row([str(datetime.now()), "Paciente sede", telefono, "", "sede", "Desconocida", "No aplica", "", "Pendiente"])
+        hoja.append_row([str(datetime.now()), "Paciente sede", telefono, "", "sede", "", "Desconocida", "No aplica", "", "Pendiente"])
         return responder_whatsapp("Perfecto. Para continuar, por favor envianos una foto de la orden médica.")
 
     elif "domicilio" in mensaje:
         pacientes[telefono]["estado"] = "esperando_datos"
-        return responder_whatsapp("Perfecto. Por favor, indicame: Nombre completo, Dirección, Localidad, Cobertura y Número de Afiliado (todo en un solo mensaje separado por comas).")
+        return responder_whatsapp("Perfecto. Por favor, indicame: Nombre completo, Dirección, Localidad, Fecha de nacimiento (dd/mm/aaaa), Cobertura y Número de Afiliado (todo en un solo mensaje separado por comas).")
 
     elif pacientes[telefono].get("estado") == "esperando_datos":
         partes = mensaje.split(",")
-        if len(partes) >= 5:
+        if len(partes) >= 6:
             pacientes[telefono].update({
                 "nombre": partes[0].strip().title(),
                 "direccion": partes[1].strip(),
                 "localidad": partes[2].strip(),
-                "cobertura": partes[3].strip(),
-                "afiliado": partes[4].strip(),
+                "fecha_nacimiento": partes[3].strip(),
+                "cobertura": partes[4].strip(),
+                "afiliado": partes[5].strip(),
                 "estado": "esperando_orden"
             })
             dia_turno = determinar_dia_turno(partes[2])
             pacientes[telefono]["dia"] = dia_turno
             hoja = crear_hoja_del_dia(dia_turno)
-            hoja.append_row([str(datetime.now()), partes[0].strip(), telefono, partes[1].strip(), partes[2].strip(), partes[3].strip(), partes[4].strip(), "", "Pendiente"])
+            hoja.append_row([
+                str(datetime.now()),
+                partes[0].strip(),
+                telefono,
+                partes[1].strip(),
+                partes[2].strip(),
+                partes[3].strip(),
+                partes[4].strip(),
+                partes[5].strip(),
+                "",
+                "Pendiente"
+            ])
             return responder_whatsapp(f"¡Gracias {partes[0].strip()}! Agendamos tu turno para el día {dia_turno} entre las 08:00 y las 11:00 hs. ¿Podés enviarnos una foto de la orden médica?")
-        return responder_whatsapp("Faltan datos. Por favor escribí: Nombre, Dirección, Localidad, Cobertura, Afiliado (todo separado por comas).")
+        return responder_whatsapp("Faltan datos. Por favor escribí: Nombre, Dirección, Localidad, Fecha de nacimiento, Cobertura y Afiliado (todo separado por comas).")
 
     elif pacientes[telefono].get("estado") == "esperando_orden" and request.form.get("NumMedia") == "1":
         media_url = request.form.get("MediaUrl0")
@@ -108,13 +136,36 @@ def whatsapp_webhook():
         )
         resultado = response.choices[0].message.content
         hoja = crear_hoja_del_dia(pacientes[telefono]["dia"])
-        hoja.append_row(["Orden médica", pacientes[telefono]["nombre"], telefono, pacientes[telefono].get("direccion", ""), pacientes[telefono].get("localidad", ""), pacientes[telefono].get("cobertura", ""), pacientes[telefono].get("afiliado", ""), texto_ocr, resultado])
+        hoja.append_row([
+            "Orden médica",
+            pacientes[telefono]["nombre"],
+            telefono,
+            pacientes[telefono].get("direccion", ""),
+            pacientes[telefono].get("localidad", ""),
+            pacientes[telefono].get("fecha_nacimiento", ""),
+            pacientes[telefono].get("cobertura", ""),
+            pacientes[telefono].get("afiliado", ""),
+            texto_ocr,
+            resultado
+        ])
+        pacientes[telefono]["texto_ocr"] = texto_ocr
         pacientes[telefono]["estado"] = "completo"
         return responder_whatsapp(f"Gracias. Estas son tus indicaciones:\n\n{resultado}\n\n¡Te esperamos!")
 
-    # Fallback GPT
+    # Fallback GPT especializado
     else:
-        prompt_fallback = f"Mensaje recibido de paciente: {mensaje}\nRespondé como asistente de laboratorio clínico."
+        nombre = pacientes[telefono].get("nombre", "Paciente")
+        fecha_nacimiento = pacientes[telefono].get("fecha_nacimiento", "")
+        edad = calcular_edad(fecha_nacimiento) if fecha_nacimiento else "desconocida"
+        texto_ocr = pacientes[telefono].get("texto_ocr", "")
+
+        prompt_fallback = (
+            f"Paciente: {nombre}, Edad: {edad}\n"
+            f"Texto extraído de orden médica: {texto_ocr}\n"
+            f"Pregunta del paciente: {mensaje}\n"
+            f"Respondé SOLAMENTE si el paciente necesita hacer ayuno (y cuántas horas) y si debe recolectar orina. "
+            f"No respondas otros temas, si no se puede determinar decí que debe consultar a su médico."
+        )
         response = openai.chat.completions.create(
             model="gpt-4",
             messages=[{"role": "user", "content": prompt_fallback}]
