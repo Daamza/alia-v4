@@ -79,12 +79,20 @@ def whatsapp_webhook():
     if telefono not in pacientes:
         pacientes[telefono] = {}
 
+    # Palabras clave para iniciar flujos
+    if any(palabra in mensaje for palabra in ["resultados", "informe", "informes"]):
+        derivar_a_operador(telefono)
+        return responder_whatsapp("Te estamos derivando con un operador para ayudarte con informes o resultados. Serás contactado en breve.")
+
+    if "turno" in mensaje and not any(x in mensaje for x in ["domicilio", "sede"]):
+        return responder_whatsapp("¿Qué modalidad preferís? Escribí SEDE o DOMICILIO para continuar.")
+
     if "asistente" in mensaje:
         derivar_a_operador(telefono)
         return responder_whatsapp("Te estamos derivando con un operador, serás contactado en breve.")
 
     if "hola" in mensaje:
-        return responder_whatsapp("Hola!!! soy ALIA, ¿en qué puedo ayudarte hoy?\nRecordá que si necesitás ayuda humana podés escribir ASISTENTE en cualquier momento.")
+        return responder_whatsapp("Hola!!! Soy ALIA, ¿en qué puedo ayudarte hoy?\nRecordá que si necesitás ayuda humana podés escribir ASISTENTE en cualquier momento.")
 
     if "sede" in mensaje:
         pacientes[telefono] = {
@@ -147,9 +155,9 @@ def whatsapp_webhook():
             if ocr_response.ok:
                 texto_ocr = ocr_response.json().get("text", "")
             else:
-                return responder_whatsapp("¡Ups! No pudimos procesar tu orden médica. Escribí ASISTENTE para que te derivemos con un operador.")
+                return responder_whatsapp("¡Ups! No pudimos procesar tu orden médica. Escribí ASISTENTE para ser derivado.")
         except:
-            return responder_whatsapp("¡Ups! No pudimos procesar tu orden médica. Escribí ASISTENTE para que te derivemos con un operador.")
+            return responder_whatsapp("¡Ups! No pudimos procesar tu orden médica. Escribí ASISTENTE para ser derivado.")
 
         prompt = f"Analizá esta orden médica:\n{texto_ocr}\nExtraé: estudios, cobertura, número de afiliado e indicaciones específicas."
         response = openai.chat.completions.create(
@@ -174,7 +182,7 @@ def whatsapp_webhook():
         pacientes[telefono]["estado"] = "completo"
         return responder_whatsapp(f"Gracias. Estas son tus indicaciones:\n\n{resultado}\n\n¡Te esperamos!")
 
-    # Fallback GPT si no entiende
+    # Fallback GPT si no se entiende
     nombre = pacientes[telefono].get("nombre", "Paciente")
     fecha_nacimiento = pacientes[telefono].get("fecha_nacimiento", "")
     edad = calcular_edad(fecha_nacimiento) if fecha_nacimiento else "desconocida"
