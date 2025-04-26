@@ -193,7 +193,7 @@ def whatsapp_webhook():
         f"Texto extraído de orden médica: {texto_ocr}\n"
         f"Pregunta del paciente: {mensaje}\n"
         f"Respondé SOLAMENTE si el paciente necesita hacer ayuno (y cuántas horas) y si debe recolectar orina. "
-        f"No respondas otros temas. Si no podés determinarlo, indicá: '¡Opss! Necesitamos más ayuda. Escribí ASISTENTE para ser derivado.'"
+        f"No respondas otros temas a menos que el paciente te pregunte por un estudio en particular. Si no podés determinarlo, indicá: '¡Opss! Necesitamos más ayuda. Escribí ASISTENTE para ser derivado.'"
     )
     response = openai.chat.completions.create(
         model="gpt-4",
