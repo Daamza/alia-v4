@@ -60,7 +60,25 @@ def whatsapp_webhook():
 
     # Derivación automática si el paciente escribe "asistente"
     if "asistente" in mensaje:
-        return responder_whatsapp("Te estamos derivando a un operador humano. Comunicate al +54 9 11 xxxx xxxx.")
+    # Preparamos los datos para derivar
+    datos_para_derivar = {
+        "nombre": pacientes[telefono].get("nombre", "No disponible"),
+        "direccion": pacientes[telefono].get("direccion", "No disponible"),
+        "localidad": pacientes[telefono].get("localidad", "No disponible"),
+        "fecha_nacimiento": pacientes[telefono].get("fecha_nacimiento", "No disponible"),
+        "cobertura": pacientes[telefono].get("cobertura", "No disponible"),
+        "afiliado": pacientes[telefono].get("afiliado", "No disponible"),
+        "telefono_paciente": telefono,
+        "tipo_atencion": "SEDE" if pacientes[telefono].get("localidad", "").lower() == "sede" else "DOMICILIO",
+        "imagen_base64": pacientes[telefono].get("imagen_base64", "")
+    }
+
+    try:
+        requests.post("https://derivador-service.onrender.com/derivar", json=datos_para_derivar)
+    except Exception as e:
+        print(f"Error al derivar al operador: {e}")
+
+    return responder_whatsapp("Te estamos derivando con un operador, serás contactado en breve.")
 
     # Inicio de conversación
     if "hola" in mensaje:
