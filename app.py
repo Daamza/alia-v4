@@ -7,6 +7,9 @@ import os
 import json
 from datetime import datetime
 import requests
+from googleapiclient.discovery import build
+from googleapiclient.errors import HttpError
+from google.oauth2 import service_account
 
 app = Flask(__name__)
 openai.api_key = os.getenv("OPENAI_API_KEY")
@@ -19,11 +22,50 @@ def crear_hoja_del_dia(dia):
     creds_json = base64.b64decode(os.getenv("GOOGLE_CREDENTIALS_BASE64")).decode()
     creds = ServiceAccountCredentials.from_json_keyfile_dict(json.loads(creds_json), scope)
     client = gspread.authorize(creds)
+
+    creds_drive = service_account.Credentials.from_service_account_info(
+        json.loads(creds_json),
+        scopes=["https://www.googleapis.com/auth/drive"]
+    )
+    drive_service = build('drive', 'v3', credentials=creds_drive)
+
+    folder_id = None
     try:
-        hoja = client.open(f"Turnos_{dia}").sheet1
+        results = drive_service.files().list(
+            q="mimeType='application/vnd.google-apps.folder' and name='ALIA_TURNOS' and trashed=false",
+            spaces='drive',
+            fields='files(id, name)'
+        ).execute()
+        items = results.get('files', [])
+        if items:
+            folder_id = items[0]['id']
+        else:
+            file_metadata = {
+                'name': 'ALIA_TURNOS',
+                'mimeType': 'application/vnd.google-apps.folder'
+            }
+            file = drive_service.files().create(body=file_metadata, fields='id').execute()
+            folder_id = file.get('id')
+    except HttpError as error:
+        print(f"Error al acceder o crear carpeta ALIA_TURNOS: {error}")
+
+    nombre_archivo = f"Turnos_{dia}"
+    try:
+        hoja = client.open(nombre_archivo).sheet1
     except:
-        hoja = client.create(f"Turnos_{dia}").sheet1
+        nueva_hoja = client.create(nombre_archivo)
+        try:
+            drive_service.files().update(
+                fileId=nueva_hoja.id,
+                addParents=folder_id,
+                removeParents='root',
+                fields='id, parents'
+            ).execute()
+        except HttpError as error:
+            print(f"Error al mover la hoja a ALIA_TURNOS: {error}")
+        hoja = nueva_hoja.sheet1
         hoja.append_row(["Fecha", "Nombre", "Teléfono", "Dirección", "Localidad", "Fecha de Nacimiento", "Cobertura", "Afiliado", "Estudios", "Indicaciones"])
+
     return hoja
 
 def determinar_dia_turno(localidad):
@@ -79,7 +121,6 @@ def whatsapp_webhook():
     if telefono not in pacientes:
         pacientes[telefono] = {}
 
-    # Palabras clave para iniciar flujos
     if any(palabra in mensaje for palabra in ["resultados", "informe", "informes"]):
         derivar_a_operador(telefono)
         return responder_whatsapp("Te estamos derivando con un operador para ayudarte con informes o resultados. Serás contactado en breve.")
@@ -154,10 +195,15 @@ def whatsapp_webhook():
             ocr_response = requests.post("https://ocr-microsistema.onrender.com/ocr", json={"image_base64": image_base64})
             if ocr_response.ok:
                 texto_ocr = ocr_response.json().get("text", "")
+                if not texto_ocr.strip():
+                    derivar_a_operador(telefono)
+                    return responder_whatsapp("¡Ups! No pudimos procesar tu orden médica. Esta consulta será derivada a un operador, te estaremos contactando en breve!!")
             else:
-                return responder_whatsapp("¡Ups! No pudimos procesar tu orden médica. Escribí ASISTENTE para ser derivado.")
+                derivar_a_operador(telefono)
+                return responder_whatsapp("¡Ups! No pudimos procesar tu orden médica. Esta consulta será derivada a un operador, te estaremos contactando en breve!!")
         except:
-            return responder_whatsapp("¡Ups! No pudimos procesar tu orden médica. Escribí ASISTENTE para ser derivado.")
+            derivar_a_operador(telefono)
+            return responder_whatsapp("¡Ups! No pudimos procesar tu orden médica. Esta consulta será derivada a un operador, te estaremos contactando en breve!!")
 
         prompt = f"Analizá esta orden médica:\n{texto_ocr}\nExtraé: estudios, cobertura, número de afiliado e indicaciones específicas."
         response = openai.chat.completions.create(
@@ -193,7 +239,7 @@ def whatsapp_webhook():
         f"Texto extraído de orden médica: {texto_ocr}\n"
         f"Pregunta del paciente: {mensaje}\n"
         f"Respondé SOLAMENTE si el paciente necesita hacer ayuno (y cuántas horas) y si debe recolectar orina. "
-        f"No respondas otros temas a menos que el paciente te pregunte por un estudio en particular. Si no podés determinarlo, indicá: '¡Opss! Necesitamos más ayuda. Escribí ASISTENTE para ser derivado.'"
+        f"No respondas otros temas. Si no podés determinarlo, indicá: '¡Opss! Necesitamos más ayuda. Escribí ASISTENTE para ser derivado.'"
     )
     response = openai.chat.completions.create(
         model="gpt-4",
