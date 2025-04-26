@@ -12,6 +12,8 @@ app = Flask(__name__)
 openai.api_key = os.getenv("OPENAI_API_KEY")
 pacientes = {}
 
+# --- Funciones auxiliares ---
+
 def crear_hoja_del_dia(dia):
     scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
     creds_json = base64.b64decode(os.getenv("GOOGLE_CREDENTIALS_BASE64")).decode()
@@ -50,17 +52,7 @@ def responder_whatsapp(mensaje):
     xml = f'<?xml version="1.0" encoding="UTF-8"?><Response><Message>{mensaje}</Message></Response>'
     return Response(xml, mimetype='application/xml')
 
-@app.route("/webhook", methods=["POST"])
-def whatsapp_webhook():
-    mensaje = request.form.get("Body", "").lower()
-    telefono = request.form.get("From", "")
-    
-    if telefono not in pacientes:
-        pacientes[telefono] = {}
-
-    # Derivación automática si el paciente escribe "asistente"
-    if "asistente" in mensaje:
-    # Preparamos los datos para derivar
+def derivar_a_operador(telefono):
     datos_para_derivar = {
         "nombre": pacientes[telefono].get("nombre", "No disponible"),
         "direccion": pacientes[telefono].get("direccion", "No disponible"),
@@ -72,19 +64,29 @@ def whatsapp_webhook():
         "tipo_atencion": "SEDE" if pacientes[telefono].get("localidad", "").lower() == "sede" else "DOMICILIO",
         "imagen_base64": pacientes[telefono].get("imagen_base64", "")
     }
-
     try:
         requests.post("https://derivador-service.onrender.com/derivar", json=datos_para_derivar)
     except Exception as e:
         print(f"Error al derivar al operador: {e}")
 
-    return responder_whatsapp("Te estamos derivando con un operador, serás contactado en breve.")
+# --- Webhook principal ---
 
-    # Inicio de conversación
+@app.route("/webhook", methods=["POST"])
+def whatsapp_webhook():
+    mensaje = request.form.get("Body", "").lower()
+    telefono = request.form.get("From", "")
+
+    if telefono not in pacientes:
+        pacientes[telefono] = {}
+
+    if "asistente" in mensaje:
+        derivar_a_operador(telefono)
+        return responder_whatsapp("Te estamos derivando con un operador, serás contactado en breve.")
+
     if "hola" in mensaje:
         return responder_whatsapp("Hola!!! soy ALIA, ¿en qué puedo ayudarte hoy?\nRecordá que si necesitás ayuda humana podés escribir ASISTENTE en cualquier momento.")
 
-    elif "sede" in mensaje:
+    if "sede" in mensaje:
         pacientes[telefono] = {
             "nombre": "Paciente sede",
             "direccion": "",
@@ -99,11 +101,11 @@ def whatsapp_webhook():
         hoja.append_row([str(datetime.now()), "Paciente sede", telefono, "", "sede", "", "Desconocida", "No aplica", "", "Pendiente"])
         return responder_whatsapp("Perfecto. Para continuar, por favor envianos una foto de la orden médica.")
 
-    elif "domicilio" in mensaje:
+    if "domicilio" in mensaje:
         pacientes[telefono]["estado"] = "esperando_datos"
         return responder_whatsapp("Perfecto. Por favor, indicame: Nombre completo, Dirección, Localidad, Fecha de nacimiento (dd/mm/aaaa), Cobertura y Número de Afiliado (todo en un solo mensaje separado por comas).")
 
-    elif pacientes[telefono].get("estado") == "esperando_datos":
+    if pacientes[telefono].get("estado") == "esperando_datos":
         partes = mensaje.split(",")
         if len(partes) >= 6:
             pacientes[telefono].update({
@@ -131,21 +133,23 @@ def whatsapp_webhook():
                 "Pendiente"
             ])
             return responder_whatsapp(f"¡Gracias {partes[0].strip()}! Agendamos tu turno para el día {dia_turno} entre las 08:00 y las 11:00 hs. ¿Podés enviarnos una foto de la orden médica?")
-        return responder_whatsapp("Faltan datos. Por favor escribí: Nombre, Dirección, Localidad, Fecha de nacimiento, Cobertura y Afiliado (todo separado por comas).")
-
-    elif pacientes[telefono].get("estado") == "esperando_orden" and request.form.get("NumMedia") == "1":
-        media_url = request.form.get("MediaUrl0")
-        image_response = requests.get(media_url, auth=(os.getenv("TWILIO_ACCOUNT_SID"), os.getenv("TWILIO_AUTH_TOKEN")))
-        image_base64 = base64.b64encode(image_response.content).decode()
-        ocr_response = requests.post("https://ocr-microsistema.onrender.com/ocr", json={"image_base64": image_base64})
-
-        if ocr_response.ok:
-            try:
-                texto_ocr = ocr_response.json().get("text", "")
-            except json.JSONDecodeError:
-                return responder_whatsapp("Hubo un problema con el servicio de OCR. ¿Podés intentar enviar la imagen de nuevo?")
         else:
-            return responder_whatsapp("No pudimos conectar con el servicio OCR. Intentá más tarde.")
+            return responder_whatsapp("Faltan datos. Por favor escribí: Nombre, Dirección, Localidad, Fecha de nacimiento, Cobertura y Afiliado (todo separado por comas).")
+
+    if pacientes[telefono].get("estado") == "esperando_orden" and request.form.get("NumMedia") == "1":
+        media_url = request.form.get("MediaUrl0")
+        try:
+            image_response = requests.get(media_url, auth=(os.getenv("TWILIO_ACCOUNT_SID"), os.getenv("TWILIO_AUTH_TOKEN")))
+            image_base64 = base64.b64encode(image_response.content).decode()
+            pacientes[telefono]["imagen_base64"] = image_base64
+
+            ocr_response = requests.post("https://ocr-microsistema.onrender.com/ocr", json={"image_base64": image_base64})
+            if ocr_response.ok:
+                texto_ocr = ocr_response.json().get("text", "")
+            else:
+                return responder_whatsapp("¡Ups! No pudimos procesar tu orden médica. Escribí ASISTENTE para que te derivemos con un operador.")
+        except:
+            return responder_whatsapp("¡Ups! No pudimos procesar tu orden médica. Escribí ASISTENTE para que te derivemos con un operador.")
 
         prompt = f"Analizá esta orden médica:\n{texto_ocr}\nExtraé: estudios, cobertura, número de afiliado e indicaciones específicas."
         response = openai.chat.completions.create(
@@ -170,26 +174,25 @@ def whatsapp_webhook():
         pacientes[telefono]["estado"] = "completo"
         return responder_whatsapp(f"Gracias. Estas son tus indicaciones:\n\n{resultado}\n\n¡Te esperamos!")
 
-    # Fallback GPT especializado
-    else:
-        nombre = pacientes[telefono].get("nombre", "Paciente")
-        fecha_nacimiento = pacientes[telefono].get("fecha_nacimiento", "")
-        edad = calcular_edad(fecha_nacimiento) if fecha_nacimiento else "desconocida"
-        texto_ocr = pacientes[telefono].get("texto_ocr", "")
+    # Fallback GPT si no entiende
+    nombre = pacientes[telefono].get("nombre", "Paciente")
+    fecha_nacimiento = pacientes[telefono].get("fecha_nacimiento", "")
+    edad = calcular_edad(fecha_nacimiento) if fecha_nacimiento else "desconocida"
+    texto_ocr = pacientes[telefono].get("texto_ocr", "")
 
-        prompt_fallback = (
-            f"Paciente: {nombre}, Edad: {edad}\n"
-            f"Texto extraído de orden médica: {texto_ocr}\n"
-            f"Pregunta del paciente: {mensaje}\n"
-            f"Respondé SOLAMENTE si el paciente necesita hacer ayuno (y cuántas horas) y si debe recolectar orina. "
-            f"No respondas otros temas, si no se puede determinar decí que debe consultar a su médico."
-        )
-        response = openai.chat.completions.create(
-            model="gpt-4",
-            messages=[{"role": "user", "content": prompt_fallback}]
-        )
-        texto = response.choices[0].message.content.strip()
-        return responder_whatsapp(texto)
+    prompt_fallback = (
+        f"Paciente: {nombre}, Edad: {edad}\n"
+        f"Texto extraído de orden médica: {texto_ocr}\n"
+        f"Pregunta del paciente: {mensaje}\n"
+        f"Respondé SOLAMENTE si el paciente necesita hacer ayuno (y cuántas horas) y si debe recolectar orina. "
+        f"No respondas otros temas. Si no podés determinarlo, indicá: '¡Opss! Necesitamos más ayuda. Escribí ASISTENTE para ser derivado.'"
+    )
+    response = openai.chat.completions.create(
+        model="gpt-4",
+        messages=[{"role": "user", "content": prompt_fallback}]
+    )
+    texto = response.choices[0].message.content.strip()
+    return responder_whatsapp(texto)
 
 if __name__ == "__main__":
     app.run()
