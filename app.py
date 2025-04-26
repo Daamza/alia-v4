@@ -205,7 +205,7 @@ def whatsapp_webhook():
             derivar_a_operador(telefono)
             return responder_whatsapp("¡Ups! No pudimos procesar tu orden médica. Esta consulta será derivada a un operador, te estaremos contactando en breve!!")
 
-        prompt = f"Analizá esta orden médica:\n{texto_ocr}\nExtraé: estudios, cobertura, número de afiliado e indicaciones específicas."
+        prompt = f"Analizá esta orden médica:\n{texto_ocr}\nExtraé: estudios, cobertura, número de afiliado y solamente indica cuantas horas de ayuno se tienen que realizar y si es necesario o no recolectar la primera orina de la mañana."
         response = openai.chat.completions.create(
             model="gpt-4",
             messages=[{"role": "user", "content": prompt}]
