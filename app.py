@@ -61,8 +61,7 @@ def derivar_a_operador(telefono):
         "cobertura": pacientes[telefono].get("cobertura", "No disponible"),
         "afiliado": pacientes[telefono].get("afiliado", "No disponible"),
         "telefono_paciente": telefono,
-        "tipo_atencion": "SEDE" if pacientes[telefono].get("localidad", "").lower() == "sede" else "DOMICILIO",
-        "imagen_base64": pacientes[telefono].get("imagen_base64", "")
+        "tipo_atencion": pacientes[telefono].get("tipo_atencion", "Consulta")
     }
     try:
         requests.post("https://derivador-service.onrender.com/derivar", json=datos_para_derivar)
@@ -77,34 +76,62 @@ def whatsapp_webhook():
     telefono = request.form.get("From", "")
 
     if telefono not in pacientes:
-        pacientes[telefono] = {}
+        pacientes[telefono] = {"estado": "inicio"}
 
+    # Derivación directa si escriben "asistente"
     if "asistente" in mensaje:
         derivar_a_operador(telefono)
         return responder_whatsapp("Te estamos derivando con un operador, serás contactado en breve.")
 
-    if "hola" in mensaje:
-        return responder_whatsapp("Hola!!! soy ALIA, ¿en qué puedo ayudarte hoy?\nRecordá que si necesitás ayuda humana podés escribir ASISTENTE en cualquier momento.")
+    # Inicio del chat
+    if pacientes[telefono]["estado"] == "inicio":
+        if "hola" in mensaje:
+            pacientes[telefono]["estado"] = "esperando_opcion"
+            return responder_whatsapp(
+                "Hola!!! Soy ALIA.\n¿Sobre qué querés consultar hoy?\n\n"
+                "- Turno en SEDE\n- Turno a DOMICILIO\n- Consulta de INFORMES\n\n"
+                "Por favor escribí SEDE, DOMICILIO o INFORMES."
+            )
+        else:
+            return responder_whatsapp("Por favor escribí 'Hola' para comenzar.")
 
-    if "sede" in mensaje:
-        pacientes[telefono] = {
-            "nombre": "Paciente sede",
-            "direccion": "",
-            "localidad": "sede",
-            "fecha_nacimiento": "",
-            "cobertura": "Desconocida",
-            "afiliado": "No aplica",
-            "estado": "esperando_orden",
-            "dia": datetime.today().strftime("%A")
-        }
-        hoja = crear_hoja_del_dia(pacientes[telefono]["dia"])
-        hoja.append_row([str(datetime.now()), "Paciente sede", telefono, "", "sede", "", "Desconocida", "No aplica", "", "Pendiente"])
-        return responder_whatsapp("Perfecto. Para continuar, por favor envianos una foto de la orden médica.")
+    # Esperando opción después del hola
+    if pacientes[telefono]["estado"] == "esperando_opcion":
+        if "sede" in mensaje:
+            pacientes[telefono].update({
+                "nombre": "Paciente sede",
+                "direccion": "",
+                "localidad": "sede",
+                "fecha_nacimiento": "",
+                "cobertura": "Desconocida",
+                "afiliado": "No aplica",
+                "estado": "esperando_orden",
+                "dia": datetime.today().strftime("%A"),
+                "tipo_atencion": "SEDE"
+            })
+            hoja = crear_hoja_del_dia(pacientes[telefono]["dia"])
+            hoja.append_row([str(datetime.now()), "Paciente sede", telefono, "", "sede", "", "Desconocida", "No aplica", "", "Pendiente"])
+            return responder_whatsapp(
+                "Perfecto. Podés acercarte a nuestras sedes de 07:30 a 11:00 hs para extracciones y de 07:30 a 17:00 hs para informes.\n"
+                "Para completar tu consulta, ¿podés enviarnos una foto o PDF de tu orden médica?"
+            )
 
-    if "domicilio" in mensaje:
-        pacientes[telefono]["estado"] = "esperando_datos"
-        return responder_whatsapp("Perfecto. Por favor, indicame: Nombre completo, Dirección, Localidad, Fecha de nacimiento (dd/mm/aaaa), Cobertura y Número de Afiliado (todo en un solo mensaje separado por comas).")
+        elif "domicilio" in mensaje:
+            pacientes[telefono]["estado"] = "esperando_datos"
+            pacientes[telefono]["tipo_atencion"] = "DOMICILIO"
+            return responder_whatsapp(
+                "Perfecto. Por favor, indicame: Nombre completo, Dirección, Localidad, Fecha de nacimiento (dd/mm/aaaa), Cobertura y Número de Afiliado (todo en un solo mensaje separado por comas)."
+            )
 
+        elif "informes" in mensaje:
+            pacientes[telefono]["tipo_atencion"] = "Consulta de INFORMES"
+            derivar_a_operador(telefono)
+            return responder_whatsapp("Te estamos derivando con un operador, serás contactado en breve.")
+
+        else:
+            return responder_whatsapp("No entendí tu respuesta. Por favor escribí SEDE, DOMICILIO o INFORMES.")
+
+    # Flujo Turno Domicilio
     if pacientes[telefono].get("estado") == "esperando_datos":
         partes = mensaje.split(",")
         if len(partes) >= 6:
@@ -132,10 +159,14 @@ def whatsapp_webhook():
                 "",
                 "Pendiente"
             ])
-            return responder_whatsapp(f"¡Gracias {partes[0].strip()}! Agendamos tu turno para el día {dia_turno} entre las 08:00 y las 11:00 hs. ¿Podés enviarnos una foto de la orden médica?")
+            return responder_whatsapp(
+                f"¡Gracias {partes[0].strip()}! Agendamos tu turno para el día {dia_turno} entre las 08:00 y las 11:00 hs.\n"
+                "¿Podés enviarnos una foto o PDF de tu orden médica?"
+            )
         else:
             return responder_whatsapp("Faltan datos. Por favor escribí: Nombre, Dirección, Localidad, Fecha de nacimiento, Cobertura y Afiliado (todo separado por comas).")
 
+    # Esperando orden médica
     if pacientes[telefono].get("estado") == "esperando_orden" and request.form.get("NumMedia") == "1":
         media_url = request.form.get("MediaUrl0")
         try:
@@ -174,7 +205,7 @@ def whatsapp_webhook():
         pacientes[telefono]["estado"] = "completo"
         return responder_whatsapp(f"Gracias. Estas son tus indicaciones:\n\n{resultado}\n\n¡Te esperamos!")
 
-    # Fallback GPT si no entiende
+    # Fallback GPT si el mensaje no se entiende
     nombre = pacientes[telefono].get("nombre", "Paciente")
     fecha_nacimiento = pacientes[telefono].get("fecha_nacimiento", "")
     edad = calcular_edad(fecha_nacimiento) if fecha_nacimiento else "desconocida"
@@ -185,7 +216,7 @@ def whatsapp_webhook():
         f"Texto extraído de orden médica: {texto_ocr}\n"
         f"Pregunta del paciente: {mensaje}\n"
         f"Respondé SOLAMENTE si el paciente necesita hacer ayuno (y cuántas horas) y si debe recolectar orina. "
-        f"No respondas otros temas. Si no podés determinarlo, indicá: '¡Opss! Necesitamos más ayuda. Escribí ASISTENTE para ser derivado.'"
+        f"Si no podés determinarlo, escribí: '¡Opss! Necesitamos más ayuda. Escribí ASISTENTE para ser derivado.'"
     )
     response = openai.chat.completions.create(
         model="gpt-4",
