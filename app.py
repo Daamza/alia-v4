@@ -18,10 +18,7 @@ pacientes = {}
 # --- Funciones auxiliares ---
 
 def crear_hoja_del_dia(dia):
-    scope = [
-        "https://spreadsheets.google.com/feeds",
-        "https://www.googleapis.com/auth/drive"
-    ]
+    scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
     creds_json = base64.b64decode(os.getenv("GOOGLE_CREDENTIALS_BASE64")).decode()
     creds = ServiceAccountCredentials.from_json_keyfile_dict(json.loads(creds_json), scope)
     client = gspread.authorize(creds)
@@ -32,225 +29,179 @@ def crear_hoja_del_dia(dia):
     )
     drive_service = build('drive', 'v3', credentials=creds_drive)
 
-    # Buscar o crear carpeta ALIA_TURNOS
     folder_id = None
     try:
-        results = drive_service.files().list(
+        files = drive_service.files().list(
             q="mimeType='application/vnd.google-apps.folder' and name='ALIA_TURNOS' and trashed=false",
-            spaces='drive',
-            fields='files(id, name)'
-        ).execute()
-        items = results.get('files', [])
-        if items:
-            folder_id = items[0]['id']
+            spaces='drive', fields='files(id)').execute().get('files', [])
+        if files:
+            folder_id = files[0]['id']
         else:
-            meta = {'name': 'ALIA_TURNOS', 'mimeType': 'application/vnd.google-apps.folder'}
+            meta = {'name':'ALIA_TURNOS','mimeType':'application/vnd.google-apps.folder'}
             folder = drive_service.files().create(body=meta, fields='id').execute()
-            folder_id = folder.get('id')
+            folder_id = folder['id']
     except HttpError as e:
-        print(f"Error al acceder o crear carpeta ALIA_TURNOS: {e}")
+        print(f"Error carpeta: {e}")
 
-    nombre_archivo = f"Turnos_{dia}"
+    nombre = f"Turnos_{dia}"
     try:
-        hoja = client.open(nombre_archivo).sheet1
+        hoja = client.open(nombre).sheet1
     except:
-        nueva = client.create(nombre_archivo)
+        hoja = client.create(nombre).sheet1
         if folder_id:
             try:
                 drive_service.files().update(
-                    fileId=nueva.id,
+                    fileId=hoja.spreadsheet.id,
                     addParents=folder_id,
-                    removeParents='root',
-                    fields='id, parents'
+                    removeParents='root', fields='id,parents'
                 ).execute()
             except HttpError as e:
-                print(f"Error al mover la hoja a ALIA_TURNOS: {e}")
-        hoja = nueva.sheet1
-        hoja.append_row([
-            "Fecha", "Nombre", "Teléfono", "Dirección", "Localidad",
-            "Fecha de Nacimiento", "Cobertura", "Afiliado", "Estudios", "Indicaciones"
-        ])
+                print(f"Error mover hoja: {e}")
+        hoja.append_row(["Fecha","Nombre","Teléfono","Dirección","Localidad","Fecha de Nacimiento","Cobertura","Afiliado","Estudios","Indicaciones"])
     return hoja
 
 
 def determinar_dia_turno(localidad):
     loc = localidad.lower()
-    hoy = datetime.today().weekday()
-    if "ituzaingó" in loc:
-        return "Lunes"
-    if "merlo" in loc or "padua" in loc:
-        return "Martes" if hoy < 4 else "Viernes"
-    if "tesei" in loc or "hurlingham" in loc:
-        return "Miércoles" if hoy < 4 else "Sábado"
-    if "castelar" in loc:
-        return "Jueves"
-    return "Lunes"
+    wd = datetime.today().weekday()
+    if 'ituzaingó' in loc: return 'Lunes'
+    if 'merlo' in loc or 'padua' in loc: return 'Martes' if wd < 4 else 'Viernes'
+    if 'tesei' in loc or 'hurlingham' in loc: return 'Miércoles' if wd < 4 else 'Sábado'
+    if 'castelar' in loc: return 'Jueves'
+    return 'Lunes'
 
 
 def calcular_edad(fecha_str):
     try:
-        nac = datetime.strptime(fecha_str, "%d/%m/%Y")
+        nac = datetime.strptime(fecha_str, '%d/%m/%Y')
         hoy = datetime.today()
-        return hoy.year - nac.year - ((hoy.month, hoy.day) < (nac.month, nac.day))
+        return hoy.year - nac.year - ((hoy.month,hoy.day) < (nac.month,nac.day))
     except:
         return None
 
 
 def responder_whatsapp(texto):
-    xml = f'<?xml version="1.0" encoding="UTF-8"?><Response><Message>{texto}</Message></Response>'
-    return Response(xml, mimetype='application/xml')
+    return Response(f'<?xml version="1.0"?><Response><Message>{texto}</Message></Response>', mimetype='application/xml')
 
 
 def derivar_a_operador(tel):
-    data = {
-        "nombre": pacientes[tel].get("nombre", "No disponible"),
-        "direccion": pacientes[tel].get("direccion", "No disponible"),
-        "localidad": pacientes[tel].get("localidad", "No disponible"),
-        "fecha_nacimiento": pacientes[tel].get("fecha_nacimiento", "No disponible"),
-        "cobertura": pacientes[tel].get("cobertura", "No disponible"),
-        "afiliado": pacientes[tel].get("afiliado", "No disponible"),
-        "telefono_paciente": tel,
-        "tipo_atencion": "SEDE" if pacientes[tel].get("localidad", "").lower() == "sede" else "DOMICILIO",
-        "imagen_base64": pacientes[tel].get("imagen_base64", "")
+    info = pacientes.get(tel, {})
+    payload = {
+        'nombre': info.get('nombre','No disponible'),
+        'direccion': info.get('direccion','No disponible'),
+        'localidad': info.get('localidad','No disponible'),
+        'fecha_nacimiento': info.get('fecha_nacimiento','No disponible'),
+        'cobertura': info.get('cobertura','No disponible'),
+        'afiliado': info.get('afiliado','No disponible'),
+        'telefono_paciente': tel,
+        'tipo_atencion': 'SEDE' if info.get('localidad','').lower()=='sede' else 'DOMICILIO',
+        'imagen_base64': info.get('imagen_base64','')
     }
     try:
-        requests.post("https://derivador-service.onrender.com/derivar", json=data)
+        requests.post('https://derivador-service.onrender.com/derivar', json=payload)
     except Exception as e:
-        print(f"Error derivación: {e}")
+        print(f"Error derivar: {e}")
 
 # --- Webhook principal ---
 
-@app.route("/webhook", methods=["POST"])
+@app.route('/webhook', methods=['POST'])
 def whatsapp_webhook():
-    msg = request.form.get("Body", "").lower()
-    tel = request.form.get("From", "")
+    body = request.form.get('Body','').strip()
+    msg = body.lower()
+    tel = request.form.get('From','')
 
     if tel not in pacientes:
-        pacientes[tel] = {}
+        pacientes[tel] = {'estado': None}
 
-    # Derivaciones e inicio
-    if any(k in msg for k in ["resultados", "informe", "informes"]):
+    # Derivaciones generales
+    if any(k in msg for k in ['resultados','informe','informes']):
         derivar_a_operador(tel)
-        return responder_whatsapp("Te estamos derivando con un operador para ayudarte con informes o resultados. Serás contactado en breve.")
-    if "asistente" in msg:
+        return responder_whatsapp('Te derivamos a un operador para informes.')
+    if 'asistente' in msg:
         derivar_a_operador(tel)
-        return responder_whatsapp("Te estamos derivando con un operador, serás contactado en breve.")
-    if "hola" in msg:
-        return responder_whatsapp("Hola!!! Soy ALIA, ¿en qué puedo ayudarte hoy?\nRecordá que si necesitás ayuda humana podés escribir ASISTENTE en cualquier momento.")
-    if "turno" in msg and not any(x in msg for x in ["domicilio", "sede"]):
-        return responder_whatsapp("¿Qué modalidad preferís? Escribí SEDE o DOMICILIO para continuar.")
+        return responder_whatsapp('Te derivamos a un operador.')
+    if msg == 'hola':
+        return responder_whatsapp('Hola, soy ALIA. Escribí ASISTENTE para ayuda humana.')
+    if 'turno' in msg and msg not in ['sede','domicilio']:
+        return responder_whatsapp('¿SEDE o DOMICILIO?')
 
     # Flujo SEDE
-    if "sede" in msg and pacientes[tel].get("estado") != "esperando_datos_sede":
-        pacientes[tel]["localidad"] = "sede"
-        pacientes[tel]["estado"] = "esperando_datos_sede"
-        return responder_whatsapp(
-            "Perfecto. En SEDE, envíanos tu Nombre completo, Fecha de nacimiento (dd/mm/aaaa), Cobertura y Número de Afiliado, separados por comas."
-        )
-    if pacientes[tel].get("estado") == "esperando_datos_sede":
-        partes = msg.split(",")
-        if len(partes) >= 4:
-            nombre = partes[0].strip().title()
-            fecha_nac = partes[1].strip()
-            cobertura = partes[2].strip()
-            afiliado = partes[3].strip()
+    if msg == 'sede':
+        pacientes[tel]['estado'] = 'esperando_datos_sede'
+        pacientes[tel]['localidad'] = 'sede'
+        return responder_whatsapp('Envía: Nombre completo, Fecha de nacimiento (dd/mm/aaaa), Cobertura, N° Afiliado.')
+    elif pacientes[tel]['estado'] == 'esperando_datos_sede':
+        partes = [p.strip() for p in body.split(',')]
+        if len(partes) == 4:
+            nombre, fecha_nac, cob, af = partes
             pacientes[tel].update({
-                "nombre": nombre,
-                "direccion": "",
-                "fecha_nacimiento": fecha_nac,
-                "cobertura": cobertura,
-                "afiliado": afiliado,
-                "estado": "esperando_orden",
-                "dia": datetime.today().strftime("%A")
+                'nombre': nombre.title(), 'direccion':'',
+                'fecha_nacimiento':fecha_nac, 'cobertura':cob,
+                'afiliado':af, 'estado':'esperando_orden',
+                'dia': datetime.today().strftime('%A')
             })
-            hoja = crear_hoja_del_dia(pacientes[tel]["dia"])
+            hoja = crear_hoja_del_dia(pacientes[tel]['dia'])
             hoja.append_row([
-                str(datetime.now()), nombre, tel, "", "sede",
-                fecha_nac, cobertura, afiliado, "", "Pendiente"
+                datetime.now().isoformat(), nombre, tel, '', 'sede',
+                fecha_nac, cob, af, '', 'Pendiente'
             ])
-            return responder_whatsapp(
-                f"¡Gracias {nombre}! Tu turno en sede es entre las 08:00 y las 11:00 hs. Por favor envíanos una foto o PDF de la orden médica."
-            )
-        return responder_whatsapp(
-            "Faltan datos. Envía: Nombre, Fecha de nacimiento, Cobertura y Afiliado separados por comas."
-        )
+            return responder_whatsapp(f'Turno en sede 08:00-11:00 hs. Envía foto/PDF de orden médica.')
+        else:
+            return responder_whatsapp('Faltan datos. Envía 4 campos separados por coma.')
 
     # Flujo DOMICILIO
-    if "domicilio" in msg and pacientes[tel].get("estado") != "esperando_datos":
-        pacientes[tel]["estado"] = "esperando_datos"
-        return responder_whatsapp(
-            "Perfecto. Envía Nombre completo, Dirección, Localidad, Fecha de nacimiento (dd/mm/aaaa), Cobertura y Afiliado, separados por comas."
-        )
-    if pacientes[tel].get("estado") == "esperando_datos":
-        partes = msg.split(",")
+    if msg == 'domicilio':
+        pacientes[tel]['estado'] = 'esperando_datos'
+        return responder_whatsapp('Envía: Nombre, Dirección, Localidad, Fecha (dd/mm/aaaa), Cobertura, N° Afiliado.')
+    elif pacientes[tel]['estado'] == 'esperando_datos':
+        partes = [p.strip() for p in body.split(',')]
         if len(partes) >= 6:
-            nombre, direccion, loc, fecha_nac, cobertura, afiliado = [p.strip() for p in partes[:6]]
+            nombre, direccion, loc, fecha_nac, cob, af = partes[:6]
+            dia = determinar_dia_turno(loc)
             pacientes[tel].update({
-                "nombre": nombre.title(),
-                "direccion": direccion,
-                "localidad": loc,
-                "fecha_nacimiento": fecha_nac,
-                "cobertura": cobertura,
-                "afiliado": afiliado,
-                "estado": "esperando_orden"
+                'nombre': nombre.title(), 'direccion':direccion, 'localidad':loc,
+                'fecha_nacimiento':fecha_nac, 'cobertura':cob, 'afiliado':af,
+                'estado':'esperando_orden', 'dia':dia
             })
-            dia_turno = determinar_dia_turno(loc)
-            pacientes[tel]["dia"] = dia_turno
-            hoja = crear_hoja_del_dia(dia_turno)
+            hoja = crear_hoja_del_dia(dia)
             hoja.append_row([
-                str(datetime.now()), nombre, tel, direccion, loc,
-                fecha_nac, cobertura, afiliado, "", "Pendiente"
+                datetime.now().isoformat(), nombre, tel, direccion, loc,
+                fecha_nac, cob, af, '', 'Pendiente'
             ])
-            return responder_whatsapp(
-                f"¡Gracias {nombre}! Agendamos tu turno para {dia_turno} entre las 08:00 y las 11:00 hs. ¿Podés enviarnos la orden médica?"
-            )
-        return responder_whatsapp(
-            "Faltan datos. Envía Nombre, Dirección, Localidad, Fecha de nacimiento, Cobertura y Afiliado separados por comas."
-        )
+            return responder_whatsapp(f'Turno {dia} 08:00-11:00 hs. Envía orden médica.')
+        else:
+            return responder_whatsapp('Faltan datos. Envía 6 campos separados por coma.')
 
     # Procesar orden médica
-    if pacientes[tel].get("estado") == "esperando_orden" and request.form.get("NumMedia") == "1":
-        media = request.form.get("MediaUrl0")
+    if pacientes[tel].get('estado')=='esperando_orden' and request.form.get('NumMedia')=='1':
+        url = request.form.get('MediaUrl0')
         try:
-            resp = requests.get(media, auth=(os.getenv("TWILIO_ACCOUNT_SID"), os.getenv("TWILIO_AUTH_TOKEN")))
-            img_b64 = base64.b64encode(resp.content).decode()
-            pacientes[tel]["imagen_base64"] = img_b64
-            ocr = requests.post("https://ocr-microsistema.onrender.com/ocr", json={"image_base64": img_b64})
-            if ocr.ok:
-                texto_ocr = ocr.json().get("text", "").strip()
-                if not texto_ocr:
-                    raise Exception("OCR vacío")
-            else:
-                raise Exception("OCR falló")
+            resp = requests.get(url, auth=(os.getenv('TWILIO_ACCOUNT_SID'), os.getenv('TWILIO_AUTH_TOKEN')))
+            b64 = base64.b64encode(resp.content).decode()
+            pacientes[tel]['imagen_base64'] = b64
+            oc = requests.post('https://ocr-microsistema.onrender.com/ocr', json={'image_base64':b64})
+            texto = oc.json().get('text','').strip() if oc.ok else ''
+            if not texto:
+                raise Exception('OCR vacio')
         except:
             derivar_a_operador(tel)
-            return responder_whatsapp("¡Ups! No pudimos procesar tu orden. Te derivamos a un operador.")
-        prompt = f"Analizá esta orden médica:\n{texto_ocr}\nExtraé estudios, cobertura, afiliado e indica ayuno y recolección de orina."
-        res = openai.chat.completions.create(model="gpt-4", messages=[{"role":"user","content":prompt}])
-        resultado = res.choices[0].message.content
-        hoja = crear_hoja_del_dia(pacientes[tel]["dia"])
-        hoja.append_row([
-            "Orden médica", pacientes[tel]["nombre"], tel, pacientes[tel].get("direccion",""),
-            pacientes[tel].get("localidad",""), pacientes[tel].get("fecha_nacimiento",""),
-            pacientes[tel].get("cobertura",""), pacientes[tel].get("afiliado",""),
-            texto_ocr, resultado
-        ])
-        pacientes[tel]["texto_ocr"] = texto_ocr
-        pacientes[tel]["estado"] = "completo"
-        return responder_whatsapp(f"Gracias. Estas son tus indicaciones:\n{resultado}\n¡Te esperamos!")
+            return responder_whatsapp('Error procesando orden, te derivamos.')
+        prompt = f"Analiza esta orden:\n{texto}\nExtrae estudios, cobertura, afiliado, ayuno e orina."
+        chat = openai.chat.completions.create(model='gpt-4', messages=[{'role':'user','content':prompt}])
+        res = chat.choices[0].message.content
+        hoja = crear_hoja_del_dia(pacientes[tel]['dia'])
+        hoja.append_row(['Orden médica', pacientes[tel]['nombre'], tel, '', 'sede' if pacientes[tel]['localidad']=='sede' else '', '', '', '', texto, res])
+        pacientes[tel]['estado']='completo'
+        pacientes[tel]['texto_ocr']=texto
+        return responder_whatsapp(f'Indicaciones:\n{res}')
 
-    # Fallback GPT limitado a ayuno e orina
-    nombre = pacientes[tel].get("nombre","Paciente")
-    fecha_nac = pacientes[tel].get("fecha_nacimiento","")
-    edad = calcular_edad(fecha_nac) if fecha_nac else "desconocida"
-    texto_ocr = pacientes[tel].get("texto_ocr","")
-    prompt_fb = (
-        f"Paciente: {nombre}, Edad: {edad}\nTexto OCR: {texto_ocr}\nPregunta: {msg}\n"
-        "Respondé SOLO si necesita ayuno y cuántas horas, y si debe recolectar orina."
-        " Si no se puede, decí: '¡Opss! Necesitamos más ayuda. Escribí ASISTENTE para ser derivado.'"
-    )
-    fb = openai.chat.completions.create(model="gpt-4", messages=[{"role":"user","content":prompt_fb}])
-    return responder_whatsapp(fb.choices[0].message.content.strip())
+    # Fallback GPT
+    info = pacientes.get(tel, {})
+    edad = calcular_edad(info.get('fecha_nacimiento','')) or 'desconocida'
+    texto = info.get('texto_ocr','')
+    prompt_fb = f"Paciente:{info.get('nombre','Paciente')},Edad:{edad}\nOCR:{texto}\nPregunta:{body}\nResponde solo ayuno e orina."  
+    fb = openai.chat.completions.create(model='gpt-4', messages=[{'role':'user','content':prompt_fb}])
+    return responder_whatsapp(fb.choices[0].message.content)
 
-if __name__ == "__main__":
+if __name__=='__main__':
     app.run()
