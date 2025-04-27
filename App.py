@@ -81,6 +81,17 @@ def determinar_dia_turno(localidad):
     return 'Lunes'
 
 
+def asignar_sede(localidad_usuario):
+    loc = localidad_usuario.lower()
+    if 'ituzaingó' in loc or 'castelar' in loc:
+        return 'CASTELAR', 'Arias 2530, Castelar'
+    if 'tesei' in loc or 'hurlingham' in loc:
+        return 'TESEI', 'Concepción Arenal 2890, Villa Tesei'
+    if 'merlo' in loc or 'padua' in loc:
+        return 'MERLO', 'Jujuy 845, Merlo'
+    return 'CASTELAR', 'Arias 2530, Castelar'
+
+
 def calcular_edad(fecha_str):
     try:
         nac = datetime.strptime(fecha_str, '%d/%m/%Y')
