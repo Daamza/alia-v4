@@ -127,35 +127,56 @@ def whatsapp_webhook():
     # Derivar informes o asistencia humana
     if any(k in msg for k in ['resultados','informe','informes']):
         derivar_a_operador(tel)
-        return responder_whatsapp('Te derivamos a un operador para informes/resultados.')
+        return responder_whatsapp('Estamos derivando tus datos a un operador para terminar el ingreso. En breve serás contactado, muchas gracias.')
     if 'asistente' in msg:
         derivar_a_operador(tel)
         return responder_whatsapp('Te derivamos a un operador.')
     if msg == 'hola':
-        return responder_whatsapp('Hola! Soy ALIA. Escribe ASISTENTE para ayuda humana.')
+        return responder_whatsapp('Hola! Soy ALIA. Tu asistente con IA de laboratorio.' ' Escribe ASISTENTE en cualquier momento y serás derivado a un operador.')
     if 'turno' in msg and msg not in ['sede','domicilio']:
-        return responder_whatsapp('¿SEDE o DOMICILIO?')
-
-    # Flujo SEDE
+        return responder_whatsapp('¿Prefieres atenderte en alguna de nuestras sedes o necesitás atención a domicilio?')
+    # --- Flujo SEDE ---
     if msg == 'sede' and pacientes[tel]['estado'] is None:
-        pacientes[tel].update({'estado':'esperando_datos_sede','localidad':'sede'})
-        return responder_whatsapp('En SEDE, por favor envía: Nombre completo, Fecha nacimiento (dd/mm/aaaa), Cobertura, N° Afiliado, separados por comas.')
-    if pacientes[tel]['estado']=='esperando_datos_sede':
+        pacientes[tel]['estado'] = 'esperando_datos_sede'
+        return responder_whatsapp(
+            'En SEDE, por favor envía: Nombre completo, Localidad, Fecha nacimiento (dd/mm/aaaa), Cobertura, N° Afiliado, separados por comas.'
+        )
+        
+    if pacientes[tel]['estado'] == 'esperando_datos_sede':
         parts = [p.strip() for p in body.split(',')]
-        if len(parts)==4:
-            nombre, fecha_nac, cob, af = parts
+        # Esperamos 5 campos: Nombre, Localidad, Fecha, Cobertura, Afiliado
+        if len(parts) == 5:
+            nombre, loc, fecha_nac, cob, af = parts
+            sede, dir_sede = asignar_sede(loc)
             pacientes[tel].update({
-                'nombre':nombre.title(),'direccion':'',
-                'fecha_nacimiento':fecha_nac,'cobertura':cob,
-                'afiliado':af,'estado':'esperando_orden'
+                'nombre': nombre.title(),
+                'localidad': loc,
+                'estado': 'completo'
             })
-            dia = datetime.today().strftime('%A')
-            hoja = crear_hoja_del_dia(dia)
-            hoja.append_row([datetime.now().isoformat(), nombre, tel, '', 'sede', fecha_nac, cob, af, '', 'Pendiente'])
-            return responder_whatsapp('Turno en sede 08:00-11:00 hs. Ahora envíanos foto/PDF de orden médica.')
+            # Registrar en la hoja del día correspondiente a la sede
+            hoja = crear_hoja_del_dia(sede)
+            hoja.append_row([
+                datetime.now().isoformat(),
+                nombre.title(),
+                tel,
+                sede,        # Localidad/Tipo
+                dir_sede,    # Dirección de la sede
+                fecha_nac,
+                cob,
+                af,
+                '',          # Estudios
+                ''           # Indicaciones
+            ])
+            return responder_whatsapp(
+                f"Hola {nombre.title()} tus datos se han ingresado correctamente. "
+                f"Podés acercarte de lunes a sábado de 07:30hrs a 11:00hrs en la sede {sede} "
+                f"({dir_sede}). Que tengas un excelente día."
+            )
         else:
-            return responder_whatsapp('Faltan datos para SEDE. Envía 4 campos separados por comas.')
-
+            return responder_whatsapp(
+                'Faltan datos para SEDE. Envía 5 campos separados por comas.'
+            )
+            
     # Flujo DOMICILIO
     if msg == 'domicilio' and pacientes[tel]['estado'] is None:
         pacientes[tel]['estado']='esperando_datos'
