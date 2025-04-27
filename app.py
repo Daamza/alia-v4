@@ -141,9 +141,9 @@ def whatsapp_webhook():
         return responder_whatsapp('Estamos derivando tus datos a un operador para terminar el ingreso. En breve serás contactado, muchas gracias.')
     if 'asistente' in msg:
         derivar_a_operador(tel)
-        return responder_whatsapp('Te derivamos a un operador.')
+        return responder_whatsapp(''Estamos derivando tus datos a un operador para terminar el ingreso. En breve serás contactado, muchas gracias.')
     if msg == 'hola':
-        return responder_whatsapp('Hola! Soy ALIA. Tu asistente con IA de laboratorio.' ' Escribe ASISTENTE en cualquier momento y serás derivado a un operador.')
+        return responder_whatsapp('Hola! Soy ALIA. Tu asistente con IA de laboratorio.' ' Escribe Asistente en cualquier momento y serás derivado a un operador.')
     if 'turno' in msg and msg not in ['sede','domicilio']:
         return responder_whatsapp('¿Prefieres atenderte en alguna de nuestras sedes o necesitás atención a domicilio?')
     # --- Flujo SEDE ---
@@ -221,7 +221,7 @@ def whatsapp_webhook():
         except Exception:
             derivar_a_operador(tel)
             return responder_whatsapp('Error procesar orden, te derivamos.')
-        prompt = f"Analiza orden médica:\n{texto_ocr}\nExtrae estudios, cobertura, afiliado e indica ayuno y recolección de orina."
+        prompt = f"Analiza orden médica:\n{texto_ocr}\nExtrae estudios, cobertura, afiliado"
         chat = openai.chat.completions.create(model='gpt-4', messages=[{'role':'user','content':prompt}])
         res = chat.choices[0].message.content
         hoja = crear_hoja_del_dia(datetime.today().strftime('%A'))
@@ -233,7 +233,7 @@ def whatsapp_webhook():
     info = pacientes.get(tel,{})
     edad = calcular_edad(info.get('fecha_nacimiento','')) or 'desconocida'
     texto = info.get('texto_ocr','')
-    prompt_fb = f"Paciente:{info.get('nombre','Paciente')},Edad:{edad}\nOCR:{texto}\nPregunta:{body}\nResponde solo ayuno e orina."
+    prompt_fb = f"Paciente:{info.get('nombre','Paciente')},Edad:{edad}\nOCR:{texto}\nPregunta:{body}\nResponde solo cuanyo ayuno tiene que hacer y si tiene que recolectar o no orina."
     fb = openai.chat.completions.create(model='gpt-4', messages=[{'role':'user','content':prompt_fb}])
     return responder_whatsapp(fb.choices[0].message.content)
 
