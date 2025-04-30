@@ -233,7 +233,7 @@ def whatsapp_webhook():
     info = pacientes.get(tel,{})
     edad = calcular_edad(info.get('fecha_nacimiento','')) or 'desconocida'
     texto = info.get('texto_ocr','')
-    prompt_fb = f"Paciente:{info.get('nombre','Paciente')},Edad:{edad}\nOCR:{texto}\nPregunta:{body}\nResponde solo cuanyo ayuno tiene que hacer y si tiene que recolectar o no orina."
+    prompt_fb = f"Paciente:{info.get('nombre','Paciente')},Edad:{edad}\nOCR:{texto}\nPregunta:{body}\Responde solo cuanto ayuno tiene que hacer y si tiene que recolectar o no orina."
     fb = openai.chat.completions.create(model='gpt-4', messages=[{'role':'user','content':prompt_fb}])
     return responder_whatsapp(fb.choices[0].message.content)
 
