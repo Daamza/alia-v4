@@ -18,7 +18,7 @@ pacientes = {}
 # --- Funciones auxiliares ---
 
 def crear_hoja_del_dia(dia):
-    scope = [
+    scope = [ 
         "https://spreadsheets.google.com/feeds",
         "https://www.googleapis.com/auth/drive"
     ]
@@ -148,15 +148,14 @@ def whatsapp_webhook():
             'Escribe "Asistente" en cualquier momento y serás derivado a un operador. '
             '¿En qué puedo ayudarte hoy?'
         )
-        if 'turno' in msg and msg not in ['sede','domicilio']:
+    if 'turno' in msg and msg not in ['sede','domicilio']:
         return responder_whatsapp('¿Prefieres atenderte en alguna de nuestras sedes o necesitás atención a domicilio? Escribe alguna de las dos opciones')
     # --- Flujo SEDE ---
     if msg == 'sede' and pacientes[tel]['estado'] is None:
         pacientes[tel]['estado'] = 'esperando_datos_sede'
         return responder_whatsapp(
             'En SEDE, por favor envía: Nombre completo, Localidad, Fecha nacimiento (dd/mm/aaaa), Cobertura, N° Afiliado, separados por comas.'
-        )
-        
+        )  
     if pacientes[tel]['estado'] == 'esperando_datos_sede':
         parts = [p.strip() for p in body.split(',')]
         # Esperamos 5 campos: Nombre, Localidad, Fecha, Cobertura, Afiliado
