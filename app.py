@@ -124,6 +124,7 @@ def derivar_a_operador(tel):
     except Exception as e:
         print(f"Error derivar operador: {e}")
 
+
 # --- Webhook principal ---
 
 @app.route('/webhook', methods=['POST'])
@@ -145,20 +146,18 @@ def whatsapp_webhook():
 
     if 'hola' in msg:
         return responder_whatsapp(
-             'Hola! Soy ALIA, tu asistente con IA de laboratorio. '
-             'Escribe "Asistente" en cualquier momento y serás derivado a un operador. '
-             '¿En qué puedo ayudarte hoy?'
-    )
+            'Hola! Soy ALIA, tu asistente con IA de laboratorio. '
+            'Escribe "Asistente" en cualquier momento y serás derivado a un operador. '
+            '¿En qué puedo ayudarte hoy?'
+        )
 
     if 'turno' in msg and msg not in ['sede','domicilio']:
         return responder_whatsapp('¿Prefieres atenderte en alguna de nuestras sedes o necesitás atención a domicilio? Escribe alguna de las dos opciones')
 
     if msg == 'sede' and pacientes[tel]['estado'] is None:
         pacientes[tel]['estado'] = 'esperando_datos_sede'
-        return responder_whatsapp(
-            'En SEDE, por favor envía: Nombre completo, Localidad, Fecha nacimiento (dd/mm/aaaa), Cobertura, N° Afiliado, separados por comas.'
-        )
-        
+        return responder_whatsapp('En SEDE, por favor envía: Nombre completo, Localidad, Fecha nacimiento (dd/mm/aaaa), Cobertura, N° Afiliado, separados por comas.')
+
     if pacientes[tel]['estado'] == 'esperando_datos_sede':
         parts = [p.strip() for p in body.split(',')]
         if len(parts) == 5:
@@ -189,7 +188,7 @@ def whatsapp_webhook():
             )
         else:
             return responder_whatsapp('Faltan datos para SEDE. Envía 5 campos separados por comas.')
-            
+
     if msg == 'domicilio' and pacientes[tel]['estado'] is None:
         pacientes[tel]['estado'] = 'esperando_datos'
         return responder_whatsapp('Envía: Nombre, Dirección, Localidad, Fecha (dd/mm/aaaa), Cobertura, N° Afiliado, separados por comas.')
