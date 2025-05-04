@@ -207,7 +207,7 @@ def whatsapp_webhook():
             })
             hoja = crear_hoja_del_dia(dia)
             hoja.append_row([datetime.now().isoformat(), nombre, tel, direccion, loc, fecha_nac, cob, af, '', 'Pendiente'])
-            return responder_whatsapp(f'Turno {dia} 08:00-11:00 hs. Ahora envía orden médica.')
+            return responder_whatsapp(f'f"Hola {nombre.title()} tus datos se han ingresado correctamente para el día {dia} 08:00-11:00 hs. Ahora envía tu orden médica en cualquier formato.')
         else:
             return responder_whatsapp('Faltan datos para DOMICILIO. Envía 6 campos separados por comas.')
 
@@ -236,7 +236,7 @@ def whatsapp_webhook():
     info = pacientes.get(tel,{})
     edad = calcular_edad(info.get('fecha_nacimiento','')) or 'desconocida'
     texto = info.get('texto_ocr','')
-    prompt_fb = f"Paciente:{info.get('nombre','Paciente')},Edad:{edad}\nOCR:{texto}\nPregunta:{body}\Responde solo cuanto ayuno tiene que hacer y si tiene que recolectar o no orina."
+    prompt_fb = f"Paciente:{info.get('nombre','Paciente')},Edad:{edad}\nOCR:{texto}\nPregunta:{body}\Responde solo cuanto ayuno tiene que hacer y si tiene que recolectar o no orina,y tambien detecta si tienes que saludar cuando se despide el paciente."
     fb = openai.chat.completions.create(model='gpt-4', messages=[{'role':'user','content':prompt_fb}])
     return responder_whatsapp(fb.choices[0].message.content)
 
