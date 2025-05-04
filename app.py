@@ -146,7 +146,8 @@ def whatsapp_webhook():
         return responder_whatsapp(
             'Hola! Soy ALIA, tu asistente con IA de laboratorio. '
             'Escribe "Asistente" en cualquier momento y serás derivado a un operador. '
-            'En qué puedo ayudarte hoy? ’
+            '¿En qué puedo ayudarte hoy?'
+        )
         if 'turno' in msg and msg not in ['sede','domicilio']:
         return responder_whatsapp('¿Prefieres atenderte en alguna de nuestras sedes o necesitás atención a domicilio? Escribe alguna de las dos opciones')
     # --- Flujo SEDE ---
