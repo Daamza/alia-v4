@@ -142,7 +142,7 @@ def whatsapp_webhook():
     if 'asistente' in msg:
         derivar_a_operador(tel)
         return responder_whatsapp('Estamos derivando tus datos a un operador para terminar el ingreso. En breve serás contactado, muchas gracias.')
- if any(k in msg for k in ['hola','Hola','HOLA']):
+ if 'hola' in msg:
         return responder_whatsapp(
             'Hola! Soy ALIA, tu asistente con IA de laboratorio. '
             'Escribe "Asistente" en cualquier momento y serás derivado a un operador. '
