@@ -181,7 +181,7 @@ def whatsapp_webhook():
             return responder_whatsapp(
                 f"Hola {nombre.title()} tus datos se han ingresado correctamente. "
                 f"Podés acercarte de lunes a sábado de 07:30hrs a 11:00hrs en la sede {sede} "
-                f"({dir_sede}). Que tengas un excelente día."
+                f"({dir_sede}). Si tenés una foto o PDF de tu orden médica, enviala en este momento para recibir tus indicaciones."
             )
         else:
             return responder_whatsapp(
