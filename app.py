@@ -190,8 +190,7 @@ def whatsapp_webhook():
         else:
             return responder_whatsapp(
                 'Faltan datos para SEDE. Envía 5 campos separados por comas.'
-            )
-            
+            )      
     # Flujo DOMICILIO
     if msg == 'domicilio' and pacientes[tel]['estado'] is None:
         pacientes[tel]['estado']='esperando_datos'
