@@ -35,7 +35,7 @@ def crear_hoja_del_dia(dia):
     # Obtener o crear carpeta ALIA_TURNOS
     folder_id = None
     try:
-        results = drive_service.files().list(
+        results = drive_service.filegs().list(
             q="mimeType='application/vnd.google-apps.folder' and name='ALIA_TURNOS' and trashed=false",
             spaces='drive', fields='files(id,name)'
         ).execute()
@@ -207,7 +207,7 @@ def whatsapp_webhook():
             })
             hoja = crear_hoja_del_dia(dia)
             hoja.append_row([datetime.now().isoformat(), nombre, tel, direccion, loc, fecha_nac, cob, af, '', 'Pendiente'])
-            return responder_whatsapp(f'f"Hola {nombre.title()} tus datos se han ingresado correctamente para el día {dia} 08:00-11:00 hs. Ahora envía tu orden médica en cualquier formato.')
+            return responder_whatsapp(f'Hola {nombre.title()} tus datos se han ingresado correctamente para el día {dia} 08:00-11:00 hs. Ahora envía tu orden médica en cualquier formato.')
         else:
             return responder_whatsapp('Faltan datos para DOMICILIO. Envía 6 campos separados por comas.')
 
