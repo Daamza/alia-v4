@@ -148,7 +148,7 @@ def whatsapp_webhook():
             'Escribe "Asistente" en cualquier momento y serás derivado a un operador. '
             '¿En qué puedo ayudarte hoy?'
         )
-        if 'turno' in msg and msg not in ['sede','domicilio']:
+    if 'turno' in msg and msg not in ['sede','domicilio']:
         return responder_whatsapp('¿Prefieres atenderte en alguna de nuestras sedes o necesitás atención a domicilio? Escribe alguna de las dos opciones')
     # --- Flujo SEDE ---
     if msg == 'sede' and pacientes[tel]['estado'] is None:
