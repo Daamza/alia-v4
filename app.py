@@ -135,6 +135,7 @@ def whatsapp_webhook():
     if tel not in pacientes:
         pacientes[tel] = {'estado': None}
 
+    # Derivar informes o asistencia humana
     if any(k in msg for k in ['resultados','informe','informes']):
         derivar_a_operador(tel)
         return responder_whatsapp('Estamos derivando tus datos a un operador para terminar el ingreso. En breve serás contactado, muchas gracias.')
@@ -145,19 +146,19 @@ def whatsapp_webhook():
         return responder_whatsapp(
             'Hola! Soy ALIA, tu asistente con IA de laboratorio. '
             'Escribe "Asistente" en cualquier momento y serás derivado a un operador. '
-            '¿En qué puedo ayudarte hoy?'
-        )
-    if 'turno' in msg and msg not in ['sede','domicilio']:
+            '¿En qué puedo ayudarte hoy?’
+        if 'turno' in msg and msg not in ['sede','domicilio']:
         return responder_whatsapp('¿Prefieres atenderte en alguna de nuestras sedes o necesitás atención a domicilio? Escribe alguna de las dos opciones')
-
+    # --- Flujo SEDE ---
     if msg == 'sede' and pacientes[tel]['estado'] is None:
         pacientes[tel]['estado'] = 'esperando_datos_sede'
         return responder_whatsapp(
             'En SEDE, por favor envía: Nombre completo, Localidad, Fecha nacimiento (dd/mm/aaaa), Cobertura, N° Afiliado, separados por comas.'
         )
-
+        
     if pacientes[tel]['estado'] == 'esperando_datos_sede':
         parts = [p.strip() for p in body.split(',')]
+        # Esperamos 5 campos: Nombre, Localidad, Fecha, Cobertura, Afiliado
         if len(parts) == 5:
             nombre, loc, fecha_nac, cob, af = parts
             sede, dir_sede = asignar_sede(loc)
@@ -166,18 +167,19 @@ def whatsapp_webhook():
                 'localidad': loc,
                 'estado': 'completo'
             })
+            # Registrar en la hoja del día correspondiente a la sede
             hoja = crear_hoja_del_dia(sede)
             hoja.append_row([
                 datetime.now().isoformat(),
                 nombre.title(),
                 tel,
-                sede,
-                dir_sede,
+                sede,        # Localidad/Tipo
+                dir_sede,    # Dirección de la sede
                 fecha_nac,
                 cob,
                 af,
-                '',
-                ''
+                '',          # Estudios
+                ''           # Indicaciones
             ])
             return responder_whatsapp(
                 f"Hola {nombre.title()} tus datos se han ingresado correctamente. "
@@ -188,7 +190,8 @@ def whatsapp_webhook():
             return responder_whatsapp(
                 'Faltan datos para SEDE. Envía 5 campos separados por comas.'
             )
-
+            
+    # Flujo DOMICILIO
     if msg == 'domicilio' and pacientes[tel]['estado'] is None:
         pacientes[tel]['estado']='esperando_datos'
         return responder_whatsapp('Envía: Nombre, Dirección, Localidad, Fecha (dd/mm/aaaa), Cobertura, N° Afiliado, separados por comas.')
@@ -208,6 +211,7 @@ def whatsapp_webhook():
         else:
             return responder_whatsapp('Faltan datos para DOMICILIO. Envía 6 campos separados por comas.')
 
+    # Procesar orden médica
     if pacientes[tel].get('estado')=='esperando_orden' and request.form.get('NumMedia')=='1':
         url = request.form.get('MediaUrl0')
         try:
@@ -228,15 +232,11 @@ def whatsapp_webhook():
         pacientes[tel].update({'estado':'completo','texto_ocr':texto_ocr})
         return responder_whatsapp(f'Indicaciones:\n{res}')
 
+    # Fallback GPT limitado
     info = pacientes.get(tel,{})
     edad = calcular_edad(info.get('fecha_nacimiento','')) or 'desconocida'
     texto = info.get('texto_ocr','')
-    prompt_fb = (
-        f"Paciente:{info.get('nombre','Paciente')},Edad:{edad}\n"
-        f"OCR:{texto}\n"
-        f"Pregunta:{body}\n"
-        "Responde solo cuánto ayuno tiene que hacer y si tiene que recolectar o no orina."
-    )
+    prompt_fb = f"Paciente:{info.get('nombre','Paciente')},Edad:{edad}\nOCR:{texto}\nPregunta:{body}\Responde solo cuanto ayuno tiene que hacer y si tiene que recolectar o no orina."
     fb = openai.chat.completions.create(model='gpt-4', messages=[{'role':'user','content':prompt_fb}])
     return responder_whatsapp(fb.choices[0].message.content)
 
