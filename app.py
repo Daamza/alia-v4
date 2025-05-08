@@ -129,14 +129,14 @@ def whatsapp_webhook():
         return responder_whatsapp('Estamos derivando tus datos a un operador. En breve serás contactado.')
 
     if msg in ['hola', '¡hola!', 'hola!', 'buenas', 'buenos días']:
-        return responder_whatsapp('Hola! Soy ALIA, tu asistente con IA de laboratorio. Escribe "asistente" en cualquier momento y serás derivado a un operador. ¿En qué puedo ayudarte hoy?')
+        return responder_whatsapp('Hola! Soy ALIA, tu asistente con IA de laboratorio. Escribe "ASISTENTE" en cualquier momento y serás derivado a un operador. ¿En qué puedo ayudarte hoy?')
 
     if 'turno' in msg and msg not in ['sede','domicilio']:
-        return responder_whatsapp('¿Prefieres atenderte en alguna de nuestras sedes o necesitás atención a domicilio? escribe alguna de las dos opciones')
+        return responder_whatsapp('¿Prefieres atenderte en alguna de nuestras sedes o necesitás atención a domicilio?')
 
     if msg == 'sede' and pacientes[tel]['estado'] is None:
         pacientes[tel]['estado'] = 'esperando_datos_sede'
-        return responder_whatsapp('por favor envía tu Nombre y Apellido, Localidad, Fecha nacimiento (dd/mm/aaaa), Cobertura, N° Afiliado, separados por comas.')
+        return responder_whatsapp('En SEDE, por favor envía: Nombre completo, Localidad, Fecha nacimiento (dd/mm/aaaa), Cobertura, N° Afiliado, separados por comas.')
 
     if pacientes[tel]['estado'] == 'esperando_datos_sede':
         parts = [p.strip() for p in body.split(',')]
@@ -155,7 +155,8 @@ def whatsapp_webhook():
 
     if msg == 'domicilio' and pacientes[tel]['estado'] is None:
         pacientes[tel]['estado'] = 'esperando_datos'
-        return responder_whatsapp('Envía por favor tu Nombre y Apellido, Dirección, Localidad, Fecha de Nac. (dd/mm/aaaa), Cobertura, N° Afiliado, separados por comas.')
+        return responder_whatsapp('Envía: Nombre, Dirección, Localidad, Fecha (dd/mm/aaaa), Cobertura, N° Afiliado, separados por comas.')
+
     if pacientes[tel]['estado'] == 'esperando_datos':
         parts = [p.strip() for p in body.split(',')]
         if len(parts) >= 6:
@@ -171,7 +172,7 @@ def whatsapp_webhook():
                 datetime.now().isoformat(), nombre, tel, direccion, loc, fecha_nac,
                 cob, af, '', 'Pendiente'
             ])
-            return responder_whatsapp(f'Tu turno fue agendado con éxito para el día {dia} entre las 08:00 y 11:00 hs. Ahora, por favor, envía la orden médica.')
+            return responder_whatsapp(f'Tu turno fue agendado para el día {dia} entre las 08:00 y 11:00 hs. Ahora, por favor, envía la orden médica.')
         else:
             return responder_whatsapp('Faltan datos. Por favor, envía los 6 campos separados por comas.')
 
@@ -210,6 +211,7 @@ def whatsapp_webhook():
         else:
             return responder_whatsapp('¿Los estudios detectados son correctos? Por favor responde Sí o No.')
 
+    # Fallback GPT con despedida y encuesta
     info = pacientes.get(tel, {})
     edad = calcular_edad(info.get('fecha_nacimiento', '')) or 'desconocida'
     texto = info.get('texto_ocr', '')
@@ -220,7 +222,13 @@ def whatsapp_webhook():
         "Responde solo cuánto ayuno debe hacer y si debe recolectar orina."
     )
     fb = openai.chat.completions.create(model='gpt-4', messages=[{'role': 'user', 'content': prompt_fb}])
-    return responder_whatsapp(fb.choices[0].message.content)
+    mensaje = fb.choices[0].message.content.strip()
+    mensaje += (
+        "\n\n¡Gracias por comunicarte con ALIA! "
+        "Si querés ayudarnos a mejorar, completá esta breve encuesta: https://forms.gle/gHPbyMJfF18qYuUq9 "
+        "\n\nEscribí 'ASISTENTE' en cualquier momento para ser derivado a un operador."
+    )
+    return responder_whatsapp(mensaje)
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 10000))
