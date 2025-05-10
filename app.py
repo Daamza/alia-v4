@@ -12,6 +12,8 @@ from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 from google.oauth2 import service_account
 
+app = Flask(__name__)
+
 # ——— Configuración ——————————————————————————————————————————————————
 OPENAI_API_KEY           = os.getenv("OPENAI_API_KEY")
 TWILIO_ACCOUNT_SID       = os.getenv("TWILIO_ACCOUNT_SID")
