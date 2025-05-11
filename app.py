@@ -211,14 +211,15 @@ def whatsapp_webhook():
     if 'sede' in msg and pacientes[tel]['estado'] is None:
         pacientes[tel].update({'estado': 'esperando_datos', 'tipo_atencion': 'SEDE'})
         return responder_whatsapp(
-            "La atención en nuestras sedes es sin turno previo, pero es conveniente realizar un pre-ingreso, y obtener las indicaciones para realizar tus estudios. Por favor, envía: Nombre completo, Localidad, Fecha (dd/mm/aaaa), Cobertura, N° Afiliado. Separados por comas."
+            "La atención en nuestras sedes es sin turno previo, pero es conveniente realizar un pre-ingreso y obtener indicaciones. "
+            "Por favor envía: Nombre completo, Localidad, Fecha (dd/mm/aaaa), Cobertura, N° Afiliado. Separados por comas."
         )
 
     # 7) Flujo DOMICILIO
     if any(k in msg for k in ['domicilio','casa']) and pacientes[tel]['estado'] is None:
         pacientes[tel].update({'estado': 'esperando_datos', 'tipo_atencion': 'DOMICILIO'})
         return responder_whatsapp(
-            "Para recibir atención a DOMICILIO, por favor envía: Nombre, Dirección, Localidad, Fecha (dd/mm/aaaa), Cobertura, N° Afiliado. Separados por comas."
+            "Para atención a DOMICILIO envía: Nombre, Dirección, Localidad, Fecha (dd/mm/aaaa), Cobertura, N° Afiliado. Separados por comas."
         )
 
     # 8) Procesar datos de turno (idéntico para ambos)
@@ -245,26 +246,100 @@ def whatsapp_webhook():
                     '', 'Pendiente'
                 ])
                 return responder_whatsapp(
-                    f"Tu turno para atención a domicilio quedó agendado exitosamente, estaremos visitandote el día {dia} dentro del horario de 08:00 a 11:00 hs."
+                    f"Tu turno a domicilio quedó agendado exitosamente para {dia} de 08:00 a 11:00 hs."
                 )
 
             # SEDE
             sede, dir_sede = determinar_sede(localidad)
             return responder_whatsapp(
-                f"¡Perfecto {nombre.title()}, tus datos fueron ingresados exitosamente. "
-                f"Puedes acercarte de lunes a sábados en el horario de 7:30 hrs a 11:00 hrs "
-                f"para realizar tus estudios por nuestra sede {sede} localizada en {dir_sede}."
+                f"¡Perfecto {nombre.title()}, tus datos fueron ingresados exitosamente! "
+                f"Puedes acercarte de lunes a sábados de 7:30 a 11:00 hrs en nuestra sede {sede} ubicada en {dir_sede}."
             )
 
         return responder_whatsapp(
             "Faltan datos. Envía: Nombre, Dirección, Localidad, Fecha, Cobertura, N° Afiliado. Separados por comas."
         )
 
+    # 9) Procesar orden médica (imagen)
+    if pacientes[tel]['estado'] == 'procesado' and request.form.get('NumMedia') == '1':
+        ctype = request.form.get('MediaContentType0','').lower()
+        if 'pdf' in ctype:
+            return responder_whatsapp(
+                "No puedo procesar PDF directamente. Convertí tu orden médica a JPG/PNG y reenviá."
+            )
+        url = request.form.get('MediaUrl0')
+        try:
+            resp = requests.get(url, auth=(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN), timeout=5)
+            b64  = base64.b64encode(resp.content).decode()
+            pacientes[tel]['imagen_base64'] = b64
 
-    # Si llegó hasta acá, no reconoció la instrucción
-    return responder_whatsapp(
-        "No entendí tu solicitud. Escribí 'turno', 'informes' o 'ASISTENTE'."
+            ocr = requests.post(OCR_SERVICE_URL, json={'image_base64': b64}, timeout=10)
+            texto_ocr = ocr.json().get('text','').strip() if ocr.ok else ''
+            if not texto_ocr:
+                raise Exception("OCR vacío")
+        except Exception:
+            pacientes[tel]['ocr_fallos'] += 1
+            if pacientes[tel]['ocr_fallos'] >= 3:
+                derivar_a_operador(tel)
+                return responder_whatsapp(
+                    "No pudimos procesar la orden médica tras varios intentos. Te derivamos a un operador."
+                )
+            return responder_whatsapp(
+                "La imagen no se procesó correctamente. Enviá otra foto clara o escribe 'ASISTENTE'."
+            )
+
+        # 10) Extraer estudios con GPT
+        prompt = f"Analiza orden médica:\n{texto_ocr}\nExtrae estudios, cobertura y afiliado."
+        try:
+            resp_gpt = client.chat.completions.create(
+                model="gpt-4",
+                messages=[{"role":"user","content":prompt}]
+            )
+            estudios = resp_gpt.choices[0].message.content.strip()
+        except Exception as e:
+            print(f"Error GPT extracción: {e}")
+            estudios = ""
+
+        pacientes[tel].update({
+            'estado':           'confirmando_estudios',
+            'texto_ocr':        texto_ocr,
+            'resumen_estudios': estudios
+        })
+        return responder_whatsapp(
+            f"Detectamos estos estudios en tu orden:\n{estudios}\n¿Son correctos? Respondé 'Sí' o 'No'."
+        )
+
+    # 11) Confirmación de estudios
+    if pacientes[tel].get('estado') == 'confirmando_estudios':
+        if 'sí' in msg or 'si' in msg:
+            pacientes[tel]['estado'] = 'completo'
+            return responder_whatsapp("¡Perfecto! Estudios registrados correctamente.")
+        if 'no' in msg:
+            pacientes[tel]['estado'] = 'procesado'
+            return responder_whatsapp("Reenvíanos una foto clara de la orden médica.")
+        return responder_whatsapp("Por favor respondé 'Sí' o 'No'.")
+
+    # 12) FALLBACK GPT: preguntas de ayuno/orina
+    info  = pacientes.get(tel, {})
+    edad  = calcular_edad(info.get('fecha_nacimiento','')) or 'desconocida'
+    texto = info.get('texto_ocr','')
+    prompt_fb = (
+        f"Paciente: {info.get('nombre','Paciente')}, Edad: {edad}\n"
+        f"OCR: {texto}\n"
+        f"Pregunta: {body}\n"
+        "Responde únicamente si debe hacer ayuno (cuántas horas) y si recolectar orina."
     )
+    try:
+        resp_fb = client.chat.completions.create(
+            model="gpt-4",
+            messages=[{"role":"user","content":prompt_fb}]
+        )
+        mensaje = resp_fb.choices[0].message.content.strip()
+    except Exception as e:
+        print(f"Error OpenAI fallback: {e}")
+        mensaje = "Ocurrió un error procesando tu consulta. Intentá nuevamente más tarde."
+
+    return responder_whatsapp(mensaje)
 
 # --- Entrypoint ---------------------------------------------------------------
 if __name__ == '__main__':
