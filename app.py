@@ -238,7 +238,7 @@ def whatsapp_webhook():
         paciente['estado'] = 'esperando_orden'
         save_paciente(tel, paciente)
         return responder_whatsapp(
-            "Envía tu orden médica en JPG/PNG o responde 'No tengo orden'."
+            "Envía una foto o captura de pantalla de tu orden médica de análisis clínicos o responde 'No tengo orden'."
         )
 
     # 7) No tengo orden
