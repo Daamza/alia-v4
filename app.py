@@ -204,7 +204,7 @@ def whatsapp_webhook():
 
     # 4) Pedir turno
     if 'turno' in msg and paciente['estado'] is None:
-        return responder_whatsapp("¿Turno en sede o atención a domicilio?")
+        return responder_whatsapp("¿Prefieres un turno en una de nuestras sedes o atención a domicilio?")
 
     # 5) Pre-ingreso Sede/Domicilio
     if 'sede' in msg and paciente['estado'] is None:
@@ -212,14 +212,14 @@ def whatsapp_webhook():
         paciente['tipo_atencion'] = 'SEDE'
         save_paciente(tel, paciente)
         return responder_whatsapp(
-            "Para SEDE, envía: Nombre, Localidad, Fecha(dd/mm/aaaa), Cobertura, Nº Afiliado."
+            "Para atenderte en una de nuestras sedes no es necesario tener turno previo, pero es recomendable realizar un pre-ingreso, por favor envía: Nombre, domicilio, Localidad, Fecha de nacimiento (dd/mm/aaaa), Cobertura, Nº Afiliado, separado por comas"
         )
     if any(k in msg for k in ['domicilio','casa']) and paciente['estado'] is None:
         paciente['estado']        = 'esperando_datos'
         paciente['tipo_atencion'] = 'DOMICILIO'
         save_paciente(tel, paciente)
         return responder_whatsapp(
-            "Para DOMICILIO, envía: Nombre, Dirección, Localidad, Fecha(dd/mm/aaaa), Cobertura, Nº Afiliado."
+            "Para que te visitemos en tu domicilio por favor envía: Nombre, Dirección, Localidad, Fecha de nacimiento (dd/mm/aaaa), Cobertura, Nº Afiliado, separados por comas."
         )
 
     # 6) Procesar datos básicos
@@ -244,7 +244,7 @@ def whatsapp_webhook():
     # 7) No tengo orden
     if paciente['estado'] == 'esperando_orden' and 'no tengo orden' in msg:
         clear_paciente(tel)
-        return responder_final("Continuamos sin orden médica. Te contactaremos pronto.")
+        return responder_final("Ok continuamos sin orden médica. de ser necesario te contactaremos para terminar el pre-ingreso.")
 
     # 8) Procesar orden médica
     if paciente['estado'] == 'esperando_orden' and request.form.get('NumMedia') == '1':
