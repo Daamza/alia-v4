@@ -204,7 +204,7 @@ def whatsapp_webhook():
 
     # 4) Pedir turno
     if 'turno' in msg and paciente['estado'] is None:
-        return responder_whatsapp("¿Preferís un turno en sede o atención a domicilio?")
+        return responder_whatsapp("¿Turno en sede o atención a domicilio?")
 
     # 5) Pre-ingreso Sede/Domicilio
     if 'sede' in msg and paciente['estado'] is None:
@@ -212,14 +212,14 @@ def whatsapp_webhook():
         paciente['tipo_atencion'] = 'SEDE'
         save_paciente(tel, paciente)
         return responder_whatsapp(
-            "Para atenderse en una SEDE no es necesario un turno previo, pero es mejor si realizamos un pre-ingreso, para esto envía: Nombre, domicilio, Localidad, Fecha(dd/mm/aaaa), Cobertura, Nº Afiliado."
+            "Para SEDE, envía: Nombre, Localidad, Fecha(dd/mm/aaaa), Cobertura, Nº Afiliado."
         )
     if any(k in msg for k in ['domicilio','casa']) and paciente['estado'] is None:
         paciente['estado']        = 'esperando_datos'
         paciente['tipo_atencion'] = 'DOMICILIO'
         save_paciente(tel, paciente)
         return responder_whatsapp(
-            "Para que te realicemos una extracción a DOMICILIO, envía: Nombre, Dirección, Localidad, Fecha(dd/mm/aaaa), Cobertura, Nº Afiliado."
+            "Para DOMICILIO, envía: Nombre, Dirección, Localidad, Fecha(dd/mm/aaaa), Cobertura, Nº Afiliado."
         )
 
     # 6) Procesar datos básicos
@@ -287,14 +287,24 @@ def whatsapp_webhook():
     # 9) Confirmación de estudios
     if paciente.get('estado') == 'confirmando_estudios':
         if 'sí' in msg or 'si' in msg:
+            sede, dir_sede = determinar_sede(paciente['localidad'])
+            if paciente['tipo_atencion'] == 'SEDE':
+                mensaje = (
+                    f"El pre-ingreso se realizó correctamente. Te esperamos en la sede {sede} "
+                    f"({dir_sede}) en el horario de 07:40hrs a 11:00hrs. Muchas gracias."
+                )
+            else:
+                dia = determinar_dia_turno(paciente['localidad'])
+                mensaje = (
+                    f"Tu turno se reservó para el día {dia}, te estaremos visitando en "
+                    f"el horario de 08:00hrs a 11:00hrs. Muchas gracias."
+                )
             clear_paciente(tel)
-            return responder_final("¡Perfecto! Estudios registrados.")
+            return responder_final(mensaje)
         if 'no' in msg:
             paciente['estado'] = 'esperando_orden'
             save_paciente(tel, paciente)
-            return responder_whatsapp(
-                "Reenvía foto clara o responde 'No tengo orden'."
-            )
+            return responder_whatsapp("Reenvía foto clara o responde 'No tengo orden'.")
         return responder_whatsapp("Responde 'Sí', 'No' o 'No tengo orden'.")
 
     # 10) Fallback GPT
