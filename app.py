@@ -179,26 +179,26 @@ def whatsapp_webhook():
     # 2) Saludo
     if any(k in msg for k in ['hola','buenas']):
         return responder_whatsapp(
-            "Hola! Soy ALIA, asistente IA de laboratorio.\n"
+            "Hola! Soy ALIA, tu asistente IA de laboratorio, puedes.\n"
             "• Pedir un turno\n"
-            "• Solicitar informes\n"
+            "• Solicitar envío de resultados\n"
             "• Contactarte con un operador"
         )
 
-    # 3) Solicitar informes
-    if 'informes' in msg and paciente['estado'] is None:
-        paciente['estado'] = 'esperando_informes'
+    # 3) Solicitar resultados
+    if 'resultados' in msg and paciente['estado'] is None:
+        paciente['estado'] = 'esperando_resultados'
         save_paciente(tel, paciente)
-        return responder_whatsapp("Para informes envía: Nombre completo, Localidad.")
+        return responder_whatsapp("Para que recibir tus resultados envía: Nombre completo, Localidad.")
 
-    if paciente['estado'] == 'esperando_informes':
+    if paciente['estado'] == 'esperando_resultados':
         parts = [p.strip() for p in body.split(',')]
         if len(parts) >= 2:
             paciente['nombre'], paciente['localidad'] = parts[:2]
             derivar_a_operador(tel)
             clear_paciente(tel)
             return responder_final(
-                f"Solicitamos informes para {paciente['nombre']} en {paciente['localidad']}."
+                f"Solicitamos el envío de resultados para {paciente['nombre']} en {paciente['localidad']}."
             )
         return responder_whatsapp("Faltan datos. Envía: Nombre completo, Localidad.")
 
