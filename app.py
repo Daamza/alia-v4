@@ -189,18 +189,18 @@ def whatsapp_webhook():
     if 'resultados' in msg and paciente['estado'] is None:
         paciente['estado'] = 'esperando_resultados'
         save_paciente(tel, paciente)
-        return responder_whatsapp("Para que recibir tus resultados envía: Nombre completo, Localidad.")
+        return responder_whatsapp("Para que recibir tus resultados envía: Número de DNI y Localidad separados por una coma.")
 
     if paciente['estado'] == 'esperando_resultados':
         parts = [p.strip() for p in body.split(',')]
         if len(parts) >= 2:
-            paciente['nombre'], paciente['localidad'] = parts[:2]
+            paciente['numero de dni'], paciente['localidad'] = parts[:2]
             derivar_a_operador(tel)
             clear_paciente(tel)
             return responder_final(
-                f"Solicitamos el envío de resultados para {paciente['nombre']} en {paciente['localidad']}."
+                f"Solicitamos el envío de resultados para {paciente['numero de dni']} en {paciente['localidad']}."
             )
-        return responder_whatsapp("Faltan datos. Envía: Nombre completo, Localidad.")
+        return responder_whatsapp("Faltan datos. Envía: Número de DNI y Localidad separados por una coma.")
 
     # 4) Pedir turno
     if 'turno' in msg and paciente['estado'] is None:
