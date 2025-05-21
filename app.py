@@ -22,7 +22,6 @@ TWILIO_AUTH_TOKEN     = os.getenv("TWILIO_AUTH_TOKEN")
 OPENAI_API_KEY        = os.getenv("OPENAI_API_KEY")
 REDIS_URL             = os.getenv("REDIS_URL")
 
-# Instancias
 app    = Flask(__name__)
 client = OpenAI(api_key=OPENAI_API_KEY)
 r      = redis.from_url(REDIS_URL, decode_responses=True)
@@ -42,7 +41,7 @@ def save_paciente(tel, info):
 def clear_paciente(tel):
     r.delete(f"paciente:{tel}")
 
-# --- Funciones auxiliares ------------------------------------------------------
+# --- Auxiliares ---------------------------------------------------------------
 def responder_whatsapp(texto):
     resp = MessagingResponse()
     resp.message(texto)
@@ -79,12 +78,10 @@ def crear_hoja_del_dia(dia):
         json.loads(creds_json),
         scopes=["https://www.googleapis.com/auth/drive"]
     )
-    drive_svc   = build('drive', 'v3', credentials=creds_drive)
-
-    # Carpeta ALIA_TURNOS
+    drive_svc = build('drive', 'v3', credentials=creds_drive)
     folder_id = None
     try:
-        res   = drive_svc.files().list(
+        res = drive_svc.files().list(
             q="mimeType='application/vnd.google-apps.folder' and name='ALIA_TURNOS' and trashed=false",
             spaces='drive',
             fields='files(id)'
@@ -93,7 +90,7 @@ def crear_hoja_del_dia(dia):
         if items:
             folder_id = items[0]['id']
         else:
-            meta   = {'name': 'ALIA_TURNOS', 'mimeType': 'application/vnd.google-apps.folder'}
+            meta = {'name': 'ALIA_TURNOS', 'mimeType': 'application/vnd.google-apps.folder'}
             folder = drive_svc.files().create(body=meta, fields='id').execute()
             folder_id = folder['id']
     except HttpError as e:
@@ -157,111 +154,122 @@ def derivar_a_operador(tel):
     except Exception as e:
         print("Error derivar:", e)
 
-# --- Webhook de WhatsApp -------------------------------------------------------
+# --- Webhook WhatsApp ---------------------------------------------------------
 @app.route('/webhook', methods=['POST'])
 def whatsapp_webhook():
-    body     = request.form.get('Body', '').strip()
-    msg      = body.lower()
-    tel      = request.form.get('From', '')
+    body = request.form.get('Body', '').strip()
+    msg  = body.lower()
+    tel  = request.form.get('From', '')
     paciente = get_paciente(tel)
 
-    # Manual: reiniciar el flujo
     if 'reiniciar' in msg:
         clear_paciente(tel)
         return responder_whatsapp("Flujo reiniciado. ¿En qué puedo ayudarte hoy?")
 
-    # 1) Comando asistente
     if any(k in msg for k in ['asistente','ayuda','operador']):
         derivar_a_operador(tel)
         clear_paciente(tel)
         return responder_final("Te derivamos a un operador. En breve te contactarán.")
 
-    # 2) Saludo
     if any(k in msg for k in ['hola','buenas']):
         return responder_whatsapp(
-            "Hola! Soy ALIA, tu asistente IA de laboratorio, puedes.\n"
+            "Hola! Soy ALIA, tu asistente IA de laboratorio, puedes:\n"
             "• Pedir un turno\n"
             "• Solicitar envío de resultados\n"
             "• Contactarte con un operador"
         )
 
-    # 3) Solicitar resultados
     if 'resultados' in msg and paciente['estado'] is None:
-        paciente['estado'] = 'esperando_resultados'
+        paciente['estado'] = 'esperando_resultados_nombre'
         save_paciente(tel, paciente)
-        return responder_whatsapp("Para que recibir tus resultados envía: Número de DNI y Localidad separados por una coma.")
+        return responder_whatsapp("Para enviarte tus resultados, por favor indicá tu nombre completo:")
 
-    if paciente['estado'] == 'esperando_resultados':
-        parts = [p.strip() for p in body.split(',')]
-        if len(parts) >= 2:
-            paciente['numero de dni'], paciente['localidad'] = parts[:2]
-            derivar_a_operador(tel)
-            clear_paciente(tel)
-            return responder_final(
-                f"Solicitamos el envío de resultados para {paciente['numero de dni']} en {paciente['localidad']}."
-            )
-        return responder_whatsapp("Faltan datos. Envía: Número de DNI y Localidad separados por una coma.")
+    if paciente['estado'] == 'esperando_resultados_nombre':
+        paciente['nombre'] = body.title()
+        paciente['estado'] = 'esperando_resultados_dni'
+        save_paciente(tel, paciente)
+        return responder_whatsapp("Gracias. Ahora indicá tu número de documento:")
 
-    # 4) Pedir turno
+    if paciente['estado'] == 'esperando_resultados_dni':
+        paciente['dni'] = body.strip()
+        paciente['estado'] = 'esperando_resultados_localidad'
+        save_paciente(tel, paciente)
+        return responder_whatsapp("Por último, indicá tu localidad:")
+
+    if paciente['estado'] == 'esperando_resultados_localidad':
+        paciente['localidad'] = body.title()
+        derivar_a_operador(tel)
+        clear_paciente(tel)
+        return responder_final(
+            f"Solicitamos el envío de resultados para {paciente['nombre']} ({paciente['dni']}) en {paciente['localidad']}."
+        )
+
     if 'turno' in msg and paciente['estado'] is None:
         return responder_whatsapp("¿Prefieres un turno en una de nuestras sedes o atención a domicilio?")
 
-    # 5) Pre-ingreso Sede/Domicilio
     if 'sede' in msg and paciente['estado'] is None:
-        paciente['estado']        = 'esperando_datos'
+        paciente['estado'] = 'datos_nombre'
         paciente['tipo_atencion'] = 'SEDE'
         save_paciente(tel, paciente)
-        return responder_whatsapp(
-            "Para atenderte en una de nuestras sedes no es necesario tener turno previo, pero es recomendable realizar un pre-ingreso, por favor envía: Nombre, domicilio, Localidad, Fecha de nacimiento (dd/mm/aaaa), Cobertura, Nº Afiliado, separado por comas"
-        )
+        return responder_whatsapp("Perfecto. Para comenzar, por favor indicá tu nombre completo:")
+
     if any(k in msg for k in ['domicilio','casa']) and paciente['estado'] is None:
-        paciente['estado']        = 'esperando_datos'
+        paciente['estado'] = 'datos_nombre'
         paciente['tipo_atencion'] = 'DOMICILIO'
         save_paciente(tel, paciente)
-        return responder_whatsapp(
-            "Para que te visitemos en tu domicilio por favor envía: Nombre, Dirección, Localidad, Fecha de nacimiento (dd/mm/aaaa), Cobertura, Nº Afiliado, separados por comas."
-        )
+        return responder_whatsapp("Perfecto. Para comenzar, por favor indicá tu nombre completo:")
 
-    # 6) Procesar datos básicos
-    if paciente['estado'] == 'esperando_datos':
-        parts = [p.strip() for p in body.split(',')]
-        if len(parts) < 6:
-            return responder_whatsapp("Faltan campos. Envía 6 separados por comas.")
-        paciente.update({
-            'nombre':           parts[0].title(),
-            'direccion':        parts[1],
-            'localidad':        parts[2],
-            'fecha_nacimiento': parts[3],
-            'cobertura':        parts[4],
-            'afiliado':         parts[5]
-        })
+    if paciente['estado'] == 'datos_nombre':
+        paciente['nombre'] = body.title()
+        paciente['estado'] = 'datos_direccion'
+        save_paciente(tel, paciente)
+        return responder_whatsapp("Ahora indicá tu domicilio:")
+
+    if paciente['estado'] == 'datos_direccion':
+        paciente['direccion'] = body
+        paciente['estado'] = 'datos_localidad'
+        save_paciente(tel, paciente)
+        return responder_whatsapp("¿En qué localidad vivís?")
+
+    if paciente['estado'] == 'datos_localidad':
+        paciente['localidad'] = body.title()
+        paciente['estado'] = 'datos_nacimiento'
+        save_paciente(tel, paciente)
+        return responder_whatsapp("Indicá tu fecha de nacimiento (dd/mm/aaaa):")
+
+    if paciente['estado'] == 'datos_nacimiento':
+        paciente['fecha_nacimiento'] = body
+        paciente['estado'] = 'datos_cobertura'
+        save_paciente(tel, paciente)
+        return responder_whatsapp("¿Cuál es tu cobertura médica?")
+
+    if paciente['estado'] == 'datos_cobertura':
+        paciente['cobertura'] = body.upper()
+        paciente['estado'] = 'datos_afiliado'
+        save_paciente(tel, paciente)
+        return responder_whatsapp("¿Cuál es tu número de afiliado?")
+
+    if paciente['estado'] == 'datos_afiliado':
+        paciente['afiliado'] = body
         paciente['estado'] = 'esperando_orden'
         save_paciente(tel, paciente)
         return responder_whatsapp(
-            "Envía una foto o captura de pantalla de tu orden médica de análisis clínicos o responde 'No tengo orden'."
+            "Envía una foto de tu orden médica o respondé 'No tengo orden'."
         )
 
-    # 7) No tengo orden
     if paciente['estado'] == 'esperando_orden' and 'no tengo orden' in msg:
         clear_paciente(tel)
-        return responder_final("Ok continuamos sin orden médica. de ser necesario te contactaremos para terminar el pre-ingreso.")
+        return responder_final(
+            "Ok, continuamos sin orden médica. De ser necesario, te contactaremos para completar el pre-ingreso."
+        )
 
-    # 8) Procesar orden médica
     if paciente['estado'] == 'esperando_orden' and request.form.get('NumMedia') == '1':
         url = request.form.get('MediaUrl0')
         try:
-            resp = requests.get(
-                url,
-                auth=(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN),
-                timeout=5
-            )
+            resp = requests.get(url, auth=(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN), timeout=5)
             b64 = base64.b64encode(resp.content).decode()
             paciente['imagen_base64'] = b64
-            ocr = requests.post(
-                OCR_SERVICE_URL,
-                json={'image_base64': b64},
-                timeout=10
-            )
+            ocr = requests.post(OCR_SERVICE_URL, json={'image_base64': b64}, timeout=10)
             texto_ocr = ocr.json().get('text', '').strip() if ocr.ok else ''
             if not texto_ocr:
                 raise Exception("OCR vacío")
@@ -284,7 +292,6 @@ def whatsapp_webhook():
             f"Detectamos estos estudios:\n{estudios}\n¿Son correctos? Responde 'Sí' o 'No'."
         )
 
-    # 9) Confirmación de estudios
     if paciente.get('estado') == 'confirmando_estudios':
         if 'sí' in msg or 'si' in msg:
             sede, dir_sede = determinar_sede(paciente['localidad'])
@@ -304,10 +311,10 @@ def whatsapp_webhook():
         if 'no' in msg:
             paciente['estado'] = 'esperando_orden'
             save_paciente(tel, paciente)
-            return responder_whatsapp("Reenvía foto clara o responde 'No tengo orden'.")
+            return responder_whatsapp("Reenvía foto clara o respondé 'No tengo orden'.")
         return responder_whatsapp("Responde 'Sí', 'No' o 'No tengo orden'.")
 
-    # 10) Fallback GPT
+    # Fallback GPT
     info  = paciente
     edad  = calcular_edad(info.get('fecha_nacimiento','')) or 'desconocida'
     texto = info.get('texto_ocr','')
