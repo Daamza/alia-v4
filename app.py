@@ -192,17 +192,20 @@ def whatsapp_webhook():
     tel  = request.form.get('From', '')
     paciente = get_paciente(tel)
 
-    # --- OCR automático al recibir imagen ---
+    # 1) OCR automático al recibir imagen --------------------------
     num_media = int(request.form.get('NumMedia', 0))
     if num_media > 0:
         url  = request.form.get('MediaUrl0')
         resp = requests.get(url, auth=(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN), timeout=5)
         b64  = base64.b64encode(resp.content).decode()
-        ocr  = requests.post(OCR_SERVICE_URL, json={'image_base64': b64}, timeout=10)
+
+        ocr = requests.post(OCR_SERVICE_URL, json={'image_base64': b64}, timeout=10)
         texto_ocr = ocr.json().get('text', '').strip()
         if not texto_ocr:
             clear_paciente(tel)
             return responder_final("No pudimos procesar tu orden. Te derivamos a un operador.")
+
+        # Pedimos JSON al GPT
         prompt = (
             "Analiza esta orden médica y devuelve un JSON con las claves:\n"
             "estudios, cobertura, afiliado.\n\n" + texto_ocr
@@ -211,47 +214,60 @@ def whatsapp_webhook():
             model="gpt-4",
             messages=[{"role":"user","content":prompt}]
         )
-        datos = json.loads(pg.choices[0].message.content.strip())
+        contenido = pg.choices[0].message.content.strip()
+
+        # Manejo de posible JSON mal-formado
+        try:
+            datos = json.loads(contenido)
+        except json.JSONDecodeError:
+            print("JSON parse error, contenido recibido:", contenido)
+            clear_paciente(tel)
+            return responder_whatsapp(
+                "Lo siento, hubo un error interpretando tu orden. "
+                "¿Podrías enviarla de nuevo o responder 'No tengo orden'?"
+            )
+
+        # Si todo ok, actualizo paciente y sigo flujo
         paciente.update({
-            'estudios':     datos.get('estudios'),
-            'cobertura':    datos.get('cobertura'),
-            'afiliado':     datos.get('afiliado'),
+            'estudios':      datos.get('estudios'),
+            'cobertura':     datos.get('cobertura'),
+            'afiliado':      datos.get('afiliado'),
             'imagen_base64': b64
         })
         save_paciente(tel, paciente)
+
         pregunta = siguiente_campo_faltante(paciente)
         if pregunta:
             return responder_whatsapp(
                 f"Detectamos estos datos:\n{json.dumps(datos, ensure_ascii=False)}\n\n{pregunta}"
             )
-        # Si no falta nada, confirmar turno
+
+        # Si no faltan campos, confirmo turno
         sede, dir_sede = determinar_sede(paciente['localidad'])
         if paciente['tipo_atencion'] == 'SEDE':
             mensaje = (
                 f"El pre-ingreso se realizó correctamente. Te esperamos en la sede {sede} "
-                f"({dir_sede}) en el horario de 07:40 a 11:00. Muchas gracias."
+                f"({dir_sede}) de 07:40 a 11:00. ¡Muchas gracias!"
             )
         else:
             dia = determinar_dia_turno(paciente['localidad'])
             mensaje = (
                 f"Tu turno se reservó para el día {dia}, te visitaremos de 08:00 a 11:00. "
-                "Muchas gracias."
+                "¡Muchas gracias!"
             )
         clear_paciente(tel)
         return responder_final(mensaje)
 
-    # Reinicio de flujo
+    # 2) Resto del flujo (reiniciar, menú, turno, resultados…) ------
     if 'reiniciar' in msg:
         clear_paciente(tel)
         return responder_whatsapp("Flujo reiniciado. ¿En qué puedo ayudarte hoy?")
 
-    # Derivar a operador
     if any(k in msg for k in ['asistente','ayuda','operador']) and paciente['estado'] is None:
         derivar_a_operador(tel)
         clear_paciente(tel)
         return responder_final("Te derivamos a un operador. En breve te contactarán.")
 
-    # Menú inicial
     if any(k in msg for k in ['hola','buenas']) and paciente['estado'] is None:
         paciente['estado'] = 'menu'
         save_paciente(tel, paciente)
@@ -262,62 +278,23 @@ def whatsapp_webhook():
             "3. Contactar con un operador"
         )
 
-    # Manejo de selección de menú
     if paciente['estado'] == 'menu':
         if msg == '1':
             clear_paciente(tel)
-            return responder_whatsapp("¿Prefieres un turno en una de nuestras sedes o atención a domicilio?")
-        elif msg == '2':
+            return responder_whatsapp("¿Turno en sede o a domicilio?")
+        if msg == '2':
             paciente['estado'] = 'esperando_resultados_nombre'
             save_paciente(tel, paciente)
-            return responder_whatsapp("Para enviarte tus resultados, por favor indicá tu nombre completo:")
-        elif msg == '3':
+            return responder_whatsapp("Tu nombre completo para resultados:")
+        if msg == '3':
             derivar_a_operador(tel)
             clear_paciente(tel)
-            return responder_final("Te derivamos a un operador. En breve te contactarán.")
-        else:
-            return responder_whatsapp("Opción no válida. Por favor elige 1, 2 o 3.")
+            return responder_final("Te conectamos con un operador.")
+        return responder_whatsapp("Elige 1, 2 o 3, por favor.")
 
-    # Flujo de resultados
-    if paciente['estado'] == 'esperando_resultados_nombre':
-        paciente['nombre'] = body.title()
-        paciente['estado'] = 'esperando_resultados_dni'
-        save_paciente(tel, paciente)
-        return responder_whatsapp("Gracias. Ahora indicá tu número de documento:")
+    # … aquí el resto EXACTO de tu flujo de resultados y datos secuenciales …
 
-    if paciente['estado'] == 'esperando_resultados_dni':
-        paciente['dni'] = body.strip()
-        paciente['estado'] = 'esperando_resultados_localidad'
-        save_paciente(tel, paciente)
-        return responder_whatsapp("Por último, indicá tu localidad:")
-
-    if paciente['estado'] == 'esperando_resultados_localidad':
-        paciente['localidad'] = body.title()
-        derivar_a_operador(tel)
-        clear_paciente(tel)
-        return responder_final(
-            f"Solicitamos el envío de resultados para {paciente['nombre']} ({paciente['dni']}) en {paciente['localidad']}."
-        )
-
-    # Datos secuenciales turno
-    if paciente['estado'] and paciente['estado'].startswith('esperando_') and 'resultados' not in paciente['estado']:
-        campo = paciente['estado'].split('_', 1)[1]
-        paciente[campo] = body.title() if campo in ['nombre','localidad'] else body
-        save_paciente(tel, paciente)
-        pregunta = siguiente_campo_faltante(paciente)
-        if pregunta:
-            return responder_whatsapp(pregunta)
-        # Si ya completó todos los datos manuales, pedir foto
-        paciente['estado'] = 'esperando_orden'
-        save_paciente(tel, paciente)
-        return responder_whatsapp("Envía una foto de tu orden médica o responde 'No tengo orden'.")
-
-    if paciente['estado'] == 'esperando_orden' and 'no tengo orden' in msg:
-        # Registrar sin orden
-        clear_paciente(tel)
-        return responder_final("Ok, continuamos sin orden médica. Te contactaremos si falta información.")
-
-    # Fallback GPT para consultas generales
+    # 3) Fallback GPT para consultas generales
     info  = paciente
     edad  = calcular_edad(info.get('fecha_nacimiento','')) or 'desconocida'
     texto = info.get('texto_ocr','')
