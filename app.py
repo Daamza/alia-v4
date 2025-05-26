@@ -187,12 +187,22 @@ def siguiente_campo_faltante(paciente):
 # --- Webhook WhatsApp ---------------------------------------------------------
 @app.route('/webhook', methods=['POST'])
 def whatsapp_webhook():
+    # --- DEBUG: imprimir cabeceras y form data ---
+    print("=== NUEVA PETICIÓN AL WEBHOOK ===")
+    print("Headers:")
+    for k, v in request.headers.items():
+        print(f"  {k}: {v}")
+    print("Form:")
+    for k, v in request.form.items():
+        print(f"  {k}: {v}")
+    print("================================")
+
     body     = request.form.get('Body', '').strip()
     msg      = body.lower()
     tel      = request.form.get('From', '')
     paciente = get_paciente(tel)
 
-    # DEBUG: imprimir estado y mensaje entrante
+    # DEBUG estado previo y mensaje
     print(f"[DEBUG] Tel: {tel} | Estado previo: {paciente['estado']} | Mensaje: {msg}")
 
     try:
@@ -268,7 +278,7 @@ def whatsapp_webhook():
             clear_paciente(tel)
             return responder_final("Te derivamos a un operador. En breve te contactarán.")
 
-        # 4) Menú principal (incluye trigger 'turno') --------------------
+        # 4) Menú principal (trigger 'hola', 'buenas' o 'turno') ----------
         if paciente['estado'] is None and (any(k in msg for k in ['hola','buenas']) or 'turno' in msg):
             paciente['estado'] = 'menu'
             save_paciente(tel, paciente)
