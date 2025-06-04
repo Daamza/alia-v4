@@ -4,8 +4,8 @@ import base64
 import requests
 import redis
 from datetime import datetime
-from flask import Flask, request, Response, jsonify
-from openai import OpenAI
+from flask import Flask, request, Response
+import openai
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 from google.oauth2 import service_account
@@ -13,18 +13,18 @@ from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 
 # --- Configuración de entorno ------------------------------------------------
-# Obtenemos variables de entorno (configura estas en Render o en tu servidor)
+# Define estas variables en Render (o en tu servidor) antes de desplegar:
 META_VERIFY_TOKEN       = os.getenv("META_VERIFY_TOKEN")
 META_ACCESS_TOKEN       = os.getenv("META_ACCESS_TOKEN")
-META_PHONE_NUMBER_ID    = os.getenv("META_PHONE_NUMBER_ID")    # p.ej. "656903770841867"
+META_PHONE_NUMBER_ID    = os.getenv("META_PHONE_NUMBER_ID")    # ej. "656903770841867"
 OPENAI_API_KEY          = os.getenv("OPENAI_API_KEY")
 REDIS_URL               = os.getenv("REDIS_URL")
 GOOGLE_CREDS_B64        = os.getenv("GOOGLE_CREDENTIALS_BASE64")
 OCR_SERVICE_URL         = os.getenv("OCR_SERVICE_URL",    "https://ocr-microsistema.onrender.com/ocr")
 DERIVADOR_SERVICE_URL   = os.getenv("DERIVADOR_SERVICE_URL","https://derivador-service-onrender.com/derivar")
 
-# Cliente OpenAI
-client = OpenAI(api_key=OPENAI_API_KEY)
+# Inicializo OpenAI
+openai.api_key = OPENAI_API_KEY
 
 # Redis para sesiones
 r = redis.from_url(REDIS_URL, decode_responses=True)
@@ -33,7 +33,7 @@ r = redis.from_url(REDIS_URL, decode_responses=True)
 app = Flask(__name__)
 
 # -------------------------------------------------------------------------------
-# Funciones de sesión (igual que antes)
+# Funciones de sesión
 # -------------------------------------------------------------------------------
 def get_paciente(tel):
     data = r.get(f"paciente:{tel}")
@@ -74,7 +74,7 @@ def calcular_edad(fecha_str):
         return None
 
 # -------------------------------------------------------------------------------
-# Google Sheets / Drive (igual que antes)
+# Google Sheets / Drive
 # -------------------------------------------------------------------------------
 def crear_hoja_del_dia(dia):
     scope = [
@@ -182,7 +182,7 @@ def enviar_mensaje_whatsapp(to_number, body_text):
         print("Exception enviando WhatsApp:", e)
 
 # -------------------------------------------------------------------------------
-# Funciones auxiliares para flujo de orden (mismo esquema que tu código en Python)
+# Funciones auxiliares para flujo de orden
 # -------------------------------------------------------------------------------
 def siguiente_campo_faltante(paciente):
     orden = [
@@ -206,7 +206,7 @@ def siguiente_campo_faltante(paciente):
 @app.route("/webhook", methods=["GET", "POST"])
 def webhook_whatsapp():
     # ------------------------------------------
-    # 1) Verificación del webhook (GET) de Meta
+    # 1) Verificación del webhook (GET)
     # ------------------------------------------
     if request.method == "GET":
         mode      = request.args.get("hub.mode")
@@ -220,11 +220,9 @@ def webhook_whatsapp():
     # 2) Procesar mensaje entrante (POST JSON)
     # ------------------------------------------
     data = request.get_json()
-    # Filtramos solo eventos de WhatsApp
     if data.get("object") != "whatsapp_business_account":
         return Response("No event", status=200)
 
-    # Extraemos el primer mensaje
     try:
         entry    = data["entry"][0]
         changes  = entry["changes"][0]
@@ -236,11 +234,11 @@ def webhook_whatsapp():
     except Exception:
         return Response("Bad request", status=400)
 
-    from_number = msg.get("from")  # p.ej. "5491138261717"
-    tipo        = msg.get("type")  # "text", "image", etc.
+    from_number = msg.get("from")       # ej. "5491138261717"
+    tipo        = msg.get("type")       # "text", "image", etc.
     paciente    = get_paciente(from_number)
 
-    # Si llegó 'reiniciar' como texto, reiniciamos flujo
+    # Si es texto y dice "reiniciar", reiniciamos flujo
     if tipo == "text":
         texto = msg["text"]["body"].strip().lower()
         if "reiniciar" in texto:
@@ -255,9 +253,8 @@ def webhook_whatsapp():
         texto = msg["text"]["body"].strip()
         msg_lower = texto.lower()
 
-        # (A) Derivar a operador si el usuario lo pidió explícitamente
+        # (A) Derivar a operador si el usuario lo pide
         if any(k in msg_lower for k in ["asistente", "ayuda", "operador"]) and paciente["estado"] is None:
-            # Preparamos payload para el microservicio derivador
             payload = {
                 'nombre':            paciente.get('nombre','No disponible'),
                 'direccion':         paciente.get('direccion','No disponible'),
@@ -305,7 +302,6 @@ def webhook_whatsapp():
                 enviar_mensaje_whatsapp(from_number, "Para enviarte tus resultados, por favor indícanos tu nombre completo:")
                 return Response("OK", status=200)
             elif texto == "3":
-                # Derivar a operador
                 payload = {
                     'nombre':            paciente.get('nombre','No disponible'),
                     'direccion':         paciente.get('direccion','No disponible'),
@@ -335,7 +331,6 @@ def webhook_whatsapp():
                 enviar_mensaje_whatsapp(from_number, "Elige 1 (Sede) o 2 (Domicilio), por favor.")
                 return Response("OK", status=200)
 
-            # Iniciamos el flujo de datos secuenciales:
             pregunta = siguiente_campo_faltante(paciente)
             save_paciente(from_number, paciente)
             enviar_mensaje_whatsapp(from_number, pregunta)
@@ -344,6 +339,7 @@ def webhook_whatsapp():
         # (E) Flujo de resultados (estado empieza con 'esperando_resultados_')
         if paciente["estado"] and paciente["estado"].startswith("esperando_resultados_"):
             campo = paciente["estado"].split("_", 1)[1]  # puede ser nombre, dni, localidad
+
             if campo == "nombre":
                 paciente["nombre"] = texto.title()
                 paciente["estado"] = "esperando_resultados_dni"
@@ -360,7 +356,6 @@ def webhook_whatsapp():
 
             if campo == "localidad":
                 paciente["localidad"] = texto.title()
-                # Derivamos a operador para envío de resultados
                 payload = {
                     'nombre':            paciente.get('nombre','No disponible'),
                     'direccion':         paciente.get('direccion','No disponible'),
@@ -378,35 +373,31 @@ def webhook_whatsapp():
                 enviar_mensaje_whatsapp(from_number, confirmar)
                 return Response("OK", status=200)
 
-        # (F) Flujo de datos secuenciales (turno) – estado = 'esperando_nombre', 'esperando_direccion', etc.
+        # (F) Flujo de datos secuenciales (turno) – estado = 'esperando_nombre', etc.
         if paciente["estado"] and paciente["estado"].startswith("esperando_") and "resultados" not in paciente["estado"]:
             campo = paciente["estado"].split("_", 1)[1]
-            # Guardamos el valor que nos envían
             if campo in ["nombre", "localidad"]:
                 paciente[campo] = texto.title()
             else:
                 paciente[campo] = texto
-            # Verificamos el siguiente campo faltante
             siguiente = siguiente_campo_faltante(paciente)
             save_paciente(from_number, paciente)
             if siguiente:
                 enviar_mensaje_whatsapp(from_number, siguiente)
                 return Response("OK", status=200)
             else:
-                # Ya completó nombre, dirección, localidad, fecha_nacimiento, cobertura, afiliado y estudios
                 paciente["estado"] = "esperando_orden"
                 save_paciente(from_number, paciente)
                 enviar_mensaje_whatsapp(from_number, "Envía la foto de tu orden médica o responde 'No tengo orden'.")
                 return Response("OK", status=200)
 
-        # (G) Manejo de "No tengo orden"
+        # (G) "No tengo orden"
         if paciente["estado"] == "esperando_orden" and msg_lower == "no tengo orden":
             clear_paciente(from_number)
             enviar_mensaje_whatsapp(from_number, "Ok, continuamos sin orden médica. Te contactaremos si falta información.")
             return Response("OK", status=200)
 
         # (H) Fallback a GPT para consultas generales
-        # Calculamos edad
         edad = calcular_edad(paciente.get("fecha_nacimiento", "")) or "desconocida"
         prompt_fb = (
             f"Paciente: {paciente.get('nombre','Paciente')}, Edad: {edad}\n"
@@ -414,7 +405,7 @@ def webhook_whatsapp():
             "Responde únicamente si debe realizar ayuno (horas) o recolectar orina."
         )
         try:
-            fb = client.chat.completions.create(
+            fb = openai.ChatCompletion.create(
                 model="gpt-4",
                 messages=[{"role": "user", "content": prompt_fb}]
             )
@@ -426,13 +417,12 @@ def webhook_whatsapp():
         return Response("OK", status=200)
 
     # ------------------------------------------------------------------------
-    # 4) Si es imagen (orden médica), bajamos la foto y la procesamos
+    # 4) Si es imagen (orden médica), procesamos
     # ------------------------------------------------------------------------
     if tipo == "image":
-        # 4.1) Obtenemos el media_id que viene en msg["image"]["id"]
         media_id = msg["image"]["id"]
 
-        # 4.2) Llamamos a Graph API para obtener la URL temporal de descarga
+        # 4.2) Obtener URL temporal de descarga
         url_media_meta = f"https://graph.facebook.com/v16.0/{media_id}"
         params_meta = { "access_token": META_ACCESS_TOKEN }
         try:
@@ -447,7 +437,7 @@ def webhook_whatsapp():
             enviar_mensaje_whatsapp(from_number, "No pudimos procesar tu orden. Te derivamos a un operador.")
             return Response("OK", status=200)
 
-        # 4.3) Descargamos la imagen binaria desde media_url
+        # 4.3) Descargar la imagen
         try:
             resp_img = requests.get(media_url, timeout=10)
             resp_img.raise_for_status()
@@ -459,7 +449,7 @@ def webhook_whatsapp():
             enviar_mensaje_whatsapp(from_number, "No pudimos procesar tu orden. Te derivamos a un operador.")
             return Response("OK", status=200)
 
-        # 4.4) Enviamos base64 a OCR_SERVICE_URL
+        # 4.4) Enviar base64 a OCR_SERVICE_URL
         try:
             ocr_resp = requests.post(
                 OCR_SERVICE_URL,
@@ -476,13 +466,13 @@ def webhook_whatsapp():
             enviar_mensaje_whatsapp(from_number, "No pudimos procesar tu orden. Te derivamos a un operador.")
             return Response("OK", status=200)
 
-        # 4.5) Llamamos a OpenAI para que devuelva un JSON con estudios, cobertura, afiliado
+        # 4.5) Llamar a OpenAI para extraer JSON
         prompt = (
             "Analiza esta orden médica y devuelve un JSON con las claves:\n"
             "estudios, cobertura, afiliado.\n\n" + texto_ocr
         )
         try:
-            pg = client.chat.completions.create(
+            pg = openai.ChatCompletion.create(
                 model="gpt-4",
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.0
@@ -497,14 +487,14 @@ def webhook_whatsapp():
             )
             return Response("OK", status=200)
 
-        # 4.6) Actualizamos el objeto paciente
+        # 4.6) Actualizar paciente
         paciente["estudios"]      = datos.get("estudios")
         paciente["cobertura"]     = datos.get("cobertura")
         paciente["afiliado"]      = datos.get("afiliado")
         paciente["imagen_base64"] = b64
         save_paciente(from_number, paciente)
 
-        # 4.7) Preguntamos el siguiente campo faltante
+        # 4.7) Preguntar siguiente campo
         pregunta = siguiente_campo_faltante(paciente)
         if pregunta:
             texto_detectado = json.dumps(datos, ensure_ascii=False)
@@ -512,7 +502,7 @@ def webhook_whatsapp():
             enviar_mensaje_whatsapp(from_number, mensaje)
             return Response("OK", status=200)
 
-        # 4.8) Si no hay más campos, terminamos el flujo de orden
+        # 4.8) Terminar flujo de orden
         sede, dir_sede = determinar_sede(paciente["localidad"])
         if paciente["tipo_atencion"] == "SEDE":
             mensaje_final = (
@@ -528,7 +518,7 @@ def webhook_whatsapp():
         enviar_mensaje_whatsapp(from_number, mensaje_final)
         return Response("OK", status=200)
 
-    # Si el tipo no es texto ni imagen, simplemente devolvemos OK
+    # Si no es texto ni imagen, devolvemos OK
     return Response("OK", status=200)
 
 # -------------------------------------------------------------------------------
