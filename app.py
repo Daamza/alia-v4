@@ -173,9 +173,9 @@ def enviar_mensaje_whatsapp(to_number, body_text):
     }
     data = {
         "messaging_product": "whatsapp",
-        "to": to_nunber,
+        "to": to_number,            # corregido typo aquí
         "type": "text",
-        "text": { "body": body_text }
+        "text": {"body": body_text}
     }
     try:
         resp = requests.post(url, headers=headers, json=data, timeout=5)
@@ -222,7 +222,9 @@ def webhook_whatsapp():
     # --- Procesamos evento entrante ---
     data = request.get_json(force=True)
     print("=== NUEVA PETICIÓN AL WEBHOOK ===\n", json.dumps(data, indent=2, ensure_ascii=False))
-    if data.get("object") != "WHATSAPP_BUSINESS_ACCOUNT":
+
+    # chequeo object en minúsculas
+    if data.get("object", "").lower() != "whatsapp_business_account":
         return Response("No event", status=200)
 
     entry    = data["entry"][0]
