@@ -165,7 +165,7 @@ def derivar_a_operador(payload):
 # -------------------------------------------------------------------------------
 # Envío de WhatsApp (Cloud API)
 # -------------------------------------------------------------------------------
-def enviar_mensaje_whatsapp(+541138261717, body_text):
+def enviar_mensaje_whatsapp(to_number, body_text):
     url = f"https://graph.facebook.com/v16.0/{META_PHONE_NUMBER_ID}/messages"
     headers = {
         "Authorization": f"Bearer {META_ACCESS_TOKEN}",
@@ -173,7 +173,7 @@ def enviar_mensaje_whatsapp(+541138261717, body_text):
     }
     data = {
         "messaging_product": "whatsapp",
-        "to": +541138261717,
+        "to": to_nunber,
         "type": "text",
         "text": { "body": body_text }
     }
