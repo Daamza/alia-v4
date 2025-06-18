@@ -8,3 +8,4 @@ gspread==5.9.0
 google-api-python-client==2.86.0
 google-auth==2.23.0
 google-auth-oauthlib==1.0.0
+Pillow==10.0.0
