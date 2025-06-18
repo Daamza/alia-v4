@@ -32,8 +32,6 @@ DERIVADOR_SERVICE_URL   = os.getenv(
 # --- Inicialización de clientes ----------------------------------------------
 openai.api_key = OPENAI_API_KEY
 r = redis.from_url(REDIS_URL, decode_responses=True)
-
-# Flask: indicamos carpeta static para servir chat.html
 app = Flask(__name__, static_folder='static')
 
 # -------------------------------------------------------------------------------
@@ -67,7 +65,7 @@ def clear_paciente(tel):
     r.delete(f"paciente:{tel}")
 
 # -------------------------------------------------------------------------------
-# Utilidad: calcular edad
+# Utilidades
 # -------------------------------------------------------------------------------
 def calcular_edad(fecha_str):
     try:
@@ -76,6 +74,22 @@ def calcular_edad(fecha_str):
         return hoy.year - nac.year - ((hoy.month, hoy.day) < (nac.month, nac.day))
     except:
         return None
+
+def siguiente_campo_faltante(paciente):
+    orden = [
+        ('nombre',           "Por favor indícanos tu nombre completo:"),
+        ('direccion',        "Ahora indícanos tu domicilio:"),
+        ('localidad',        "¿En qué localidad vivís?"),
+        ('fecha_nacimiento', "Por favor indícanos tu fecha de nacimiento (dd/mm/aaaa):"),
+        ('cobertura',        "¿Cuál es tu cobertura médica?"),
+        ('afiliado',         "¿Cuál es tu número de afiliado?"),
+        ('estudios',         "Por favor confírmanos los estudios solicitados:")
+    ]
+    for campo, pregunta in orden:
+        if not paciente.get(campo):
+            paciente['estado'] = f'esperando_{campo}'
+            return pregunta
+    return None
 
 # -------------------------------------------------------------------------------
 # Google Sheets / Drive
@@ -152,16 +166,16 @@ def determinar_sede(localidad):
     return 'GENERAL', 'Nuestra sede principal'
 
 # -------------------------------------------------------------------------------
-# Derivar a operador
+# Derivación a operador
 # -------------------------------------------------------------------------------
 def derivar_a_operador(payload):
     try:
         requests.post(DERIVADOR_SERVICE_URL, json=payload, timeout=5)
     except Exception as e:
-        print("Error al derivar a operador:", e)
+        print("Error derivando a operador:", e)
 
 # -------------------------------------------------------------------------------
-# Envío de mensajes WhatsApp via Cloud API
+# Envío de WhatsApp Cloud API
 # -------------------------------------------------------------------------------
 def enviar_mensaje_whatsapp(to_number, body_text):
     url = f"https://graph.facebook.com/v16.0/{META_PHONE_NUMBER_ID}/messages"
@@ -183,30 +197,107 @@ def enviar_mensaje_whatsapp(to_number, body_text):
         print("Exception enviando WhatsApp:", e)
 
 # -------------------------------------------------------------------------------
-# Siguiente campo para turno
+# Función centralizada de procesamiento de ALIA
 # -------------------------------------------------------------------------------
-def siguiente_campo_faltante(paciente):
-    orden = [
-        ('nombre',           "Por favor indícanos tu nombre completo:"),
-        ('direccion',        "Ahora indícanos tu domicilio:"),
-        ('localidad',        "¿En qué localidad vivís?"),
-        ('fecha_nacimiento', "Por favor indícanos tu fecha de nacimiento (dd/mm/aaaa):"),
-        ('cobertura',        "¿Cuál es tu cobertura médica?"),
-        ('afiliado',         "¿Cuál es tu número de afiliado?"),
-        ('estudios',         "Por favor confírmanos los estudios solicitados:")
-    ]
-    for campo, pregunta in orden:
-        if not paciente.get(campo):
-            paciente['estado'] = f'esperando_{campo}'
-            return pregunta
-    return None
+def procesar_mensaje_alia(from_number: str, tipo: str, contenido: str) -> str:
+    paciente = get_paciente(from_number)
+
+    # — Texto —
+    if tipo == "text":
+        texto = contenido.strip()
+        lower = texto.lower()
+
+        if "reiniciar" in lower:
+            clear_paciente(from_number)
+            return "Flujo reiniciado. ¿En qué puedo ayudarte hoy?"
+
+        if paciente["estado"] is None and any(k in lower for k in ["asistente","ayuda","operador"]):
+            clear_paciente(from_number)
+            return "Te derivo a un operador. En breve te contactarán."
+
+        if paciente["estado"] is None and any(k in lower for k in ["hola","buenas"]):
+            paciente["estado"] = "menu"
+            save_paciente(from_number, paciente)
+            return (
+                "Hola! Soy ALIA, tu asistente IA de laboratorio. Elige una opción:\n"
+                "1. Pedir un turno\n2. Solicitar envío de resultados\n3. Contactar con un operador"
+            )
+
+        if paciente["estado"] == "menu":
+            if texto == "1":
+                paciente["estado"] = "menu_turno"
+                save_paciente(from_number, paciente)
+                return "¿Dónde prefieres el turno? 1. Sede  2. Domicilio"
+            if texto == "2":
+                paciente["estado"] = "esperando_resultados_nombre"
+                save_paciente(from_number, paciente)
+                return "Para resultados, indícanos tu nombre completo:"
+            if texto == "3":
+                clear_paciente(from_number)
+                return "Te derivo a un operador. En breve te contactarán."
+            return "Opción no válida. Elige 1, 2 o 3."
+
+        if paciente["estado"] and paciente["estado"].startswith("esperando_") \
+           and "resultados" not in paciente["estado"]:
+            campo = paciente["estado"].split("_",1)[1]
+            paciente[campo] = texto.title() if campo in ["nombre","localidad"] else texto
+            siguiente = siguiente_campo_faltante(paciente)
+            save_paciente(from_number, paciente)
+            if siguiente:
+                return siguiente
+            paciente["estado"] = "esperando_orden"
+            save_paciente(from_number, paciente)
+            return "Envía foto de tu orden médica o responde 'No tengo orden'."
+
+        if paciente["estado"] and paciente["estado"].startswith("esperando_resultados_"):
+            campo = paciente["estado"].split("_",1)[1]
+            if campo == "nombre":
+                paciente["nombre"] = texto.title()
+                paciente["estado"] = "esperando_resultados_dni"
+                save_paciente(from_number, paciente)
+                return "Ahora tu número de documento:"
+            if campo == "dni":
+                paciente["dni"] = texto
+                paciente["estado"] = "esperando_resultados_localidad"
+                save_paciente(from_number, paciente)
+                return "Finalmente, tu localidad:"
+            if campo == "localidad":
+                paciente["localidad"] = texto.title()
+                clear_paciente(from_number)
+                return f"Solicitamos envío de resultados para {paciente['nombre']} ({paciente['dni']}) en {paciente['localidad']}."
+
+        if paciente["estado"] == "esperando_orden" and lower == "no tengo orden":
+            clear_paciente(from_number)
+            return "Continuamos sin orden médica. Te contactaremos si hace falta."
+
+        # Fallback GPT
+        edad = calcular_edad(paciente.get("fecha_nacimiento","")) or "desconocida"
+        prompt = (
+            f"Paciente: {paciente.get('nombre','')} (Edad {edad})\n"
+            f"Pregunta: {texto}\nResponde solo si debe ayunar o recolectar orina."
+        )
+        try:
+            resp = openai.ChatCompletion.create(
+                model="gpt-4",
+                messages=[{"role":"user","content":prompt}]
+            )
+            return resp.choices[0].message.content.strip()
+        except:
+            return "Error procesando la consulta. Intentá más tarde."
+
+    # — Imagen —
+    if tipo == "image":
+        # En tu webhook descargas y conviertes a base64 y lo pasas aquí como contenido
+        # Para demo:
+        return "Orden recibida. (Demo OCR pendiente)"
+
+    return "No pude procesar tu mensaje."
 
 # -------------------------------------------------------------------------------
-# Webhook WhatsApp (GET verify, POST messages)
+# Webhook WhatsApp: GET verifica, POST procesa y envía
 # -------------------------------------------------------------------------------
 @app.route("/webhook", methods=["GET", "POST"])
 def webhook_whatsapp():
-    # Verificación de Meta (GET)
     if request.method == "GET":
         mode      = request.args.get("hub.mode")
         token     = request.args.get("hub.verify_token")
@@ -215,276 +306,53 @@ def webhook_whatsapp():
             return Response(challenge, status=200)
         return Response("Forbidden", status=403)
 
-    # Procesamiento de mensaje entrante (POST)
     data = request.get_json(force=True)
     if data.get("object","").lower() != "whatsapp_business_account":
         return Response("No event", status=200)
 
     entry    = data["entry"][0]
-    changes  = entry["changes"][0]
-    value    = changes["value"]
-    messages = value.get("messages", [])
-    if not messages:
-        return Response("No messages", status=200)
+    msg      = entry["changes"][0]["value"]["messages"][0]
+    from_nr  = msg["from"]
+    tipo     = msg["type"]
 
-    msg         = messages[0]
-    from_number = msg.get("from")
-    tipo        = msg.get("type")
-    paciente    = get_paciente(from_number)
-
-   # --- Texto simple ---
     if tipo == "text":
-        texto = msg["text"]["body"].strip()
-        lower = texto.lower()
-
-        # Reiniciar
-        if "reiniciar" in lower:
-            clear_paciente(from_number)
-            enviar_mensaje_whatsapp(from_number, "Flujo reiniciado. ¿En qué puedo ayudarte hoy?")
-            return Response("OK", status=200)
-
-        # Derivar a operador
-        if any(k in lower for k in ["asistente","ayuda","operador"]) and paciente["estado"] is None:
-            derivar_a_operador({
-                'nombre': paciente.get('nombre','-'),
-                'direccion': paciente.get('direccion','-'),
-                'localidad': paciente.get('localidad','-'),
-                'fecha_nacimiento': paciente.get('fecha_nacimiento','-'),
-                'cobertura': paciente.get('cobertura','-'),
-                'afiliado': paciente.get('afiliado','-'),
-                'telefono_paciente': from_number,
-                'tipo_atencion': paciente.get('tipo_atencion','-'),
-                'imagen_base64': paciente.get('imagen_base64','')
-            })
-            clear_paciente(from_number)
-            enviar_mensaje_whatsapp(from_number, "Te derivamos a un operador. En breve te contactarán.")
-            return Response("OK", status=200)
-
-        # Saludo / menú
-        if paciente["estado"] is None and any(k in lower for k in ["hola","buenas"]):
-            paciente["estado"] = "menu"
-            save_paciente(from_number, paciente)
-            enviar_mensaje_whatsapp(from_number,
-                "Hola! Soy ALIA, tu asistente IA de laboratorio. Elige una opción enviando el número:\n"
-                "1. Pedir un turno\n"
-                "2. Solicitar envío de resultados\n"
-                "3. Contactar con un operador"
-            )
-            return Response("OK", status=200)
-
-        # Menú principal
-        if paciente["estado"] == "menu":
-            if texto == "1":
-                paciente["estado"] = "menu_turno"
-                save_paciente(from_number, paciente)
-                enviar_mensaje_whatsapp(from_number,
-                    "¿Dónde prefieres el turno? Elige un número:\n1. Sede\n2. Domicilio"
-                )
-            elif texto == "2":
-                paciente["estado"] = "esperando_resultados_nombre"
-                save_paciente(from_number, paciente)
-                enviar_mensaje_whatsapp(from_number,
-                    "Para enviarte tus resultados, por favor indícanos tu nombre completo:"
-                )
-            elif texto == "3":
-                derivar_a_operador({
-                    'nombre': paciente.get('nombre','-'),
-                    'direccion': paciente.get('direccion','-'),
-                    'localidad': paciente.get('localidad','-'),
-                    'fecha_nacimiento': paciente.get('fecha_nacimiento','-'),
-                    'cobertura': paciente.get('cobertura','-'),
-                    'afiliado': paciente.get('afiliado','-'),
-                    'telefono_paciente': from_number,
-                    'tipo_atencion': paciente.get('tipo_atencion','-'),
-                    'imagen_base64': paciente.get('imagen_base64','')
-                })
-                clear_paciente(from_number)
-                enviar_mensaje_whatsapp(from_number, "Te derivamos a un operador. En breve te contactarán.")
-            else:
-                enviar_mensaje_whatsapp(from_number, "Opción no válida. Elige 1, 2 o 3.")
-            return Response("OK", status=200)
-
-        # Sub-menú turno
-        if paciente["estado"] == "menu_turno":
-            if texto == "1":
-                paciente["tipo_atencion"] = "SEDE"
-            elif texto == "2":
-                paciente["tipo_atencion"] = "DOMICILIO"
-            else:
-                enviar_mensaje_whatsapp(from_number, "Elige 1 (Sede) o 2 (Domicilio).")
-                return Response("OK", status=200)
-            pregunta = siguiente_campo_faltante(paciente)
-            save_paciente(from_number, paciente)
-            enviar_mensaje_whatsapp(from_number, pregunta)
-            return Response("OK", status=200)
-
-        # Flujo resultados
-        if paciente["estado"] and paciente["estado"].startswith("esperando_resultados_"):
-            campo = paciente["estado"].split("_",1)[1]
-            if campo == "nombre":
-                paciente["nombre"] = texto.title()
-                paciente["estado"] = "esperando_resultados_dni"
-                save_paciente(from_number, paciente)
-                enviar_mensaje_whatsapp(from_number, "Ahora indícanos tu número de documento:")
-            elif campo == "dni":
-                paciente["dni"] = texto.strip()
-                paciente["estado"] = "esperando_resultados_localidad"
-                save_paciente(from_number, paciente)
-                enviar_mensaje_whatsapp(from_number, "Por último, indícanos tu localidad:")
-            elif campo == "localidad":
-                paciente["localidad"] = texto.title()
-                derivar_a_operador({
-                    'nombre': paciente.get('nombre','-'),
-                    'direccion': paciente.get('direccion','-'),
-                    'localidad': paciente.get('localidad','-'),
-                    'fecha_nacimiento': paciente.get('fecha_nacimiento','-'),
-                    'cobertura': paciente.get('cobertura','-'),
-                    'afiliado': paciente.get('afiliado','-'),
-                    'telefono_paciente': from_number,
-                    'tipo_atencion': paciente.get('tipo_atencion','-'),
-                    'imagen_base64': paciente.get('imagen_base64','')
-                })
-                clear_paciente(from_number)
-                enviar_mensaje_whatsapp(from_number,
-                    f"Solicitamos el envío de resultados para {paciente['nombre']} ({paciente['dni']}) en {paciente['localidad']}."
-                )
-            return Response("OK", status=200)
-
-        # Flujo turno secuencial
-        if paciente["estado"] and paciente["estado"].startswith("esperando_") and "resultados" not in paciente["estado"]:
-            campo = paciente["estado"].split("_",1)[1]
-            paciente[campo] = texto.title() if campo in ["nombre","localidad"] else texto
-            siguiente = siguiente_campo_faltante(paciente)
-            save_paciente(from_number, paciente)
-            if siguiente:
-                enviar_mensaje_whatsapp(from_number, siguiente)
-            else:
-                paciente["estado"] = "esperando_orden"
-                save_paciente(from_number, paciente)
-                enviar_mensaje_whatsapp(from_number, "Envía la foto de tu orden médica o responde 'No tengo orden'.")
-            return Response("OK", status=200)
-
-        # No tengo orden
-        if paciente["estado"] == "esperando_orden" and lower == "no tengo orden":
-            clear_paciente(from_number)
-            enviar_mensaje_whatsapp(from_number, "Ok, continuamos sin orden médica.")
-            return Response("OK", status=200)
-
-        # Fallback GPT
-        edad = calcular_edad(paciente.get("fecha_nacimiento","")) or "desconocida"
-        prompt_fb = (
-            f"Paciente: {paciente.get('nombre','')} (Edad {edad})\n"
-            f"Pregunta: {texto}\n"
-            "Responde sólo si debe realizar ayuno (horas) o recolectar orina."
-        )
-        try:
-            fb = openai.ChatCompletion.create(
-                model="gpt-4",
-                messages=[{"role":"user","content":prompt_fb}]
-            )
-            enviar_mensaje_whatsapp(from_number, fb.choices[0].message.content.strip())
-        except Exception as e:
-            print("Error GPT fallback:", e)
-            enviar_mensaje_whatsapp(from_number, "Error procesando tu consulta.")
+        user_text = msg["text"]["body"]
+        reply = procesar_mensaje_alia(from_nr, "text", user_text)
+        enviar_mensaje_whatsapp(from_nr, reply)
         return Response("OK", status=200)
 
-    # --- Imagen (orden médica) ---
     if tipo == "image":
+        # Descargar y convertir a base64:
         media_id = msg["image"]["id"]
-        # 1) obtener URL temporal
-        try:
-            meta = requests.get(
-                f"https://graph.facebook.com/v16.0/{media_id}",
-                params={"access_token": META_ACCESS_TOKEN},
-                timeout=5
-            ).json()
-            media_url = meta.get("url")
-            if not media_url:
-                raise Exception("Sin URL en media meta")
-        except Exception as e:
-            print("Error meta media URL:", e)
-            clear_paciente(from_number)
-            enviar_mensaje_whatsapp(from_number, "No pudimos procesar tu orden.")
-            return Response("OK", status=200)
-        # 2) descargar imagen
-        try:
-            img = requests.get(media_url, timeout=10).content
-            b64 = base64.b64encode(img).decode()
-        except Exception as e:
-            print("Error bajando imagen:", e)
-            clear_paciente(from_number)
-            enviar_mensaje_whatsapp(from_number, "No pudimos procesar tu orden.")
-            return Response("OK", status=200)
-        # 3) OCR
-        try:
-            ocr = requests.post(
-                OCR_SERVICE_URL,
-                json={'image_base64': b64},
-                timeout=10
-            ).json().get("text","").strip()
-            if not ocr:
-                raise Exception("OCR vacío")
-        except Exception as e:
-            print("Error OCR:", e)
-            clear_paciente(from_number)
-            enviar_mensaje_whatsapp(from_number, "No pudimos procesar tu orden.")
-            return Response("OK", status=200)
-        # 4) OpenAI extrae JSON
-        prompt = f"Analiza esta orden médica y devuelve un JSON con claves estudios, cobertura, afiliado.\n\n{ocr}"
-        try:
-            res = openai.ChatCompletion.create(
-                model="gpt-4",
-                messages=[{"role":"user","content":prompt}],
-                temperature=0.0
-            )
-            datos = json.loads(res.choices[0].message.content.strip())
-        except Exception as e:
-            print("Error OpenAI JSON:", e)
-            clear_paciente(from_number)
-            enviar_mensaje_whatsapp(from_number, "Error interpretando tu orden.")
-            return Response("OK", status=200)
-        # 5) guardo datos y pregunto lo que falte
-        paciente.update({
-            "estudios": datos.get("estudios"),
-            "cobertura": datos.get("cobertura"),
-            "afiliado": datos.get("afiliado"),
-            "imagen_base64": b64
-        })
-        save_paciente(from_number, paciente)
-        siguiente = siguiente_campo_faltante(paciente)
-        if siguiente:
-            enviar_mensaje_whatsapp(
-                from_number,
-                f"Detectamos:\n{json.dumps(datos, ensure_ascii=False)}\n\n{siguiente}"
-            )
-            return Response("OK", status=200)
-        # 6) terminar flujo
-        sede, dir_sede = determinar_sede(paciente["localidad"])
-        if paciente["tipo_atencion"] == "SEDE":
-            texto_fin = f"Pre-ingreso OK. Te esperamos en {sede} ({dir_sede}) de 07:40 a 11:00."
-        else:
-            dia = determinar_dia_turno(paciente["localidad"])
-            texto_fin = f"Turno para {dia}, te visitaremos de 08:00 a 11:00."
-        clear_paciente(from_number)
-        enviar_mensaje_whatsapp(from_number, texto_fin)
+        meta = requests.get(
+            f"https://graph.facebook.com/v16.0/{media_id}",
+            params={"access_token": META_ACCESS_TOKEN}
+        ).json()
+        media_url = meta.get("url")
+        img = requests.get(media_url).content
+        b64 = base64.b64encode(img).decode()
+        reply = procesar_mensaje_alia(from_nr, "image", b64)
+        enviar_mensaje_whatsapp(from_nr, reply)
         return Response("OK", status=200)
 
-    # resto de tipos: OK
     return Response("OK", status=200)
 
 # -------------------------------------------------------------------------------
-# Interfaz de prueba: servir chat.html & API de demo
+# Interfaz demo: servir chat.html y API de chat
 # -------------------------------------------------------------------------------
+@app.route("/", methods=["GET"])
+def serve_root():
+    return send_from_directory(app.static_folder, "chat.html")
+
 @app.route("/chat", methods=["GET"])
 def serve_chat():
     return send_from_directory(app.static_folder, "chat.html")
 
 @app.route("/chat", methods=["POST"])
 def api_chat():
-    payload = request.get_json(force=True)
-    user_msg = payload.get("message","").strip()
-    # TODO: reemplazar este eco por tu lógica de ALIA:
-    reply = f"ALIA demo: {user_msg}"
+    data = request.get_json(force=True)
+    user_msg = data.get("message","").strip()
+    reply = procesar_mensaje_alia("demo", "text", user_msg)
     return jsonify({"reply": reply})
 
 # -------------------------------------------------------------------------------
