@@ -37,7 +37,6 @@ def get_paciente(tel):
         return json.loads(data)
     p = {
         'estado': None,
-        'ocr_fallos': 0,
         'tipo_atencion': None,
         'nombre': None,
         'direccion': None,
@@ -128,21 +127,90 @@ def enviar_mensaje_whatsapp(to_number, body_text):
         print("Exception WhatsApp:", e)
 
 # -------------------------------------------------------------------------------
+# Procesamiento de imagen (OCR + GPT)
+# -------------------------------------------------------------------------------
+def handle_image(from_number, b64):
+    paciente = get_paciente(from_number)
+    # 1) OCR
+    try:
+        ocr_resp = requests.post(
+            OCR_SERVICE_URL,
+            json={'image_base64': b64},
+            timeout=10
+        )
+        ocr_resp.raise_for_status()
+        texto_ocr = ocr_resp.json().get("text","").strip()
+        if not texto_ocr:
+            raise ValueError("OCR vacío")
+    except Exception:
+        return "No pudimos procesar tu orden médica."
+
+    # 2) GPT extrae JSON
+    prompt = (
+        "Analiza esta orden médica y devuelve un JSON con claves:\n"
+        "estudios, cobertura, afiliado.\n\n" + texto_ocr
+    )
+    try:
+        gpt = openai.ChatCompletion.create(
+            model="gpt-4",
+            messages=[{"role":"user","content":prompt}],
+            temperature=0.0
+        )
+        datos = json.loads(gpt.choices[0].message.content.strip())
+    except Exception:
+        return "Error interpretando tu orden médica."
+
+    # 3) Guardar en sesión
+    paciente.update({
+        "estudios":      datos.get("estudios"),
+        "cobertura":     datos.get("cobertura"),
+        "afiliado":      datos.get("afiliado"),
+        "imagen_base64": b64
+    })
+    save_paciente(from_number, paciente)
+
+    # 4) Si faltan campos, preguntar
+    siguiente = siguiente_campo_faltante(paciente)
+    if siguiente:
+        return (
+            f"Detectamos:\n{json.dumps(datos, ensure_ascii=False)}\n\n{siguiente}"
+        )
+
+    # 5) Cerrar turno
+    sede, dir_sede = determinar_sede(paciente["localidad"])
+    if paciente["tipo_atencion"] == "SEDE":
+        texto_fin = (
+            f"El pre-ingreso se realizó correctamente. Te esperamos en la sede {sede} "
+            f"({dir_sede}) de 07:40 a 11:00. Las prácticas quedan sujetas a autorización del prestador."
+        )
+    else:
+        dia = determinar_dia_turno(paciente["localidad"])
+        texto_fin = (
+            f"Tu turno se reservó para el día {dia}, te visitaremos de 08:00 a 11:00. "
+            "Las prácticas quedan sujetas a autorización del prestador."
+        )
+    clear_paciente(from_number)
+    return texto_fin
+
+# -------------------------------------------------------------------------------
 # Lógica central de ALIA
 # -------------------------------------------------------------------------------
 def procesar_mensaje_alia(from_number: str, tipo: str, contenido: str) -> str:
     paciente = get_paciente(from_number)
 
-    # --- 1) Si en cualquier texto dicen “turno”, forzamos menú_turno ---
+    # 0) “turno” en cualquier parte fuerza menú_turno
     if tipo == "text" and "turno" in contenido.lower():
         paciente["estado"] = "menu_turno"
         save_paciente(from_number, paciente)
         return "¿Dónde prefieres el turno? 1. Sede   2. Domicilio"
 
-    # --- 2) Flujo esperando orden médica ---
-    if paciente.get("estado") == "esperando_orden":
-        if tipo == "image":
-            return procesar_mensaje_alia(from_number, "image", contenido)
+    # 1) Si es imagen, canalizamos siempre al handler
+    if tipo == "image":
+        # si estaba esperando orden, lo lleva aquí
+        return handle_image(from_number, contenido)
+
+    # 2) Flujo esperando orden médica (texto)
+    if paciente.get("estado") == "esperando_orden" and tipo == "text":
         txt = contenido.strip().lower()
         if txt in ("no", "no tengo orden"):
             paciente["estado"] = "esperando_estudios_manual"
@@ -150,7 +218,7 @@ def procesar_mensaje_alia(from_number: str, tipo: str, contenido: str) -> str:
             return "Ok, continuamos sin orden médica. Por favor, escribí los estudios solicitados:"
         return "Por favor envía la foto de tu orden médica o responde 'no' para continuar sin orden."
 
-    # --- 3) Sub-flujo manual de estudios (sin orden) ---
+    # 3) Sub-flujo manual de estudios
     if paciente.get("estado") == "esperando_estudios_manual" and tipo == "text":
         estudios_raw = contenido.strip()
         prompt = (
@@ -172,6 +240,7 @@ def procesar_mensaje_alia(from_number: str, tipo: str, contenido: str) -> str:
         paciente["estudios"] = estudios
         save_paciente(from_number, paciente)
 
+        # mensaje final
         if paciente.get("tipo_atencion") == "SEDE":
             sede, dir_sede = determinar_sede(paciente["localidad"])
             texto_fin = (
@@ -187,7 +256,7 @@ def procesar_mensaje_alia(from_number: str, tipo: str, contenido: str) -> str:
         clear_paciente(from_number)
         return texto_fin
 
-    # --- 4) Procesamiento de texto genérico ---
+    # 4) Texto genérico
     if tipo == "text":
         texto = contenido.strip()
         lower = texto.lower()
@@ -196,6 +265,7 @@ def procesar_mensaje_alia(from_number: str, tipo: str, contenido: str) -> str:
             clear_paciente(from_number)
             return "Flujo reiniciado. ¿En qué puedo ayudarte hoy?"
 
+        # menú inicial
         if paciente["estado"] is None and any(k in lower for k in ["hola","buenas"]):
             paciente["estado"] = "menu"
             save_paciente(from_number, paciente)
@@ -206,7 +276,7 @@ def procesar_mensaje_alia(from_number: str, tipo: str, contenido: str) -> str:
                 "3. Contactar con un operador"
             )
 
-        # Menú principal
+        # menu principal
         if paciente.get("estado") == "menu":
             if texto in ("1",) or "turno" in lower:
                 paciente["estado"] = "menu_turno"
@@ -219,9 +289,8 @@ def procesar_mensaje_alia(from_number: str, tipo: str, contenido: str) -> str:
             elif texto in ("3",) or any(k in lower for k in ["operador","ayuda","asistente"]):
                 clear_paciente(from_number)
                 return "Te derivo a un operador. En breve te contactarán."
-            # si no coincide, dejamos pasar para la sección menu_turno o fallback
 
-        # --- Sub-menú “Pedir turno” ---
+        # sub-menú turno
         if paciente.get("estado") == "menu_turno":
             if texto in ("1",) or "sede" in lower:
                 paciente["tipo_atencion"] = "SEDE"
@@ -233,7 +302,7 @@ def procesar_mensaje_alia(from_number: str, tipo: str, contenido: str) -> str:
             save_paciente(from_number, paciente)
             return pregunta
 
-        # Flujo resultados
+        # flujo resultados
         if paciente.get("estado", "").startswith("esperando_resultados_"):
             campo = paciente["estado"].split("_",1)[1]
             if campo == "nombre":
@@ -254,7 +323,7 @@ def procesar_mensaje_alia(from_number: str, tipo: str, contenido: str) -> str:
                     f"({paciente['dni']}) en {paciente['localidad']}."
                 )
 
-        # Flujo datos secuenciales (turno)
+        # flujo secuencial (turno)
         if paciente.get("estado", "").startswith("esperando_"):
             campo = paciente["estado"].split("_",1)[1]
             paciente[campo] = texto.title() if campo in ["nombre","localidad"] else texto
@@ -266,12 +335,12 @@ def procesar_mensaje_alia(from_number: str, tipo: str, contenido: str) -> str:
             save_paciente(from_number, paciente)
             return "Envía foto de tu orden médica o responde 'no' para continuar sin orden."
 
-        # --- Fallback GPT para todo texto no gestionado arriba ---
+        # fallback GPT
         edad = calcular_edad(paciente.get("fecha_nacimiento","")) or "desconocida"
         prompt = (
             f"Paciente: {paciente.get('nombre','')} (Edad {edad})\n"
             f"Pregunta: {texto}\n"
-            "Responde con la mejor respuesta o reconoce si no entendiste."
+            "Responde con la mejor respuesta o di que no entendiste."
         )
         try:
             res = openai.ChatCompletion.create(
@@ -282,69 +351,10 @@ def procesar_mensaje_alia(from_number: str, tipo: str, contenido: str) -> str:
         except:
             return "Lo siento, no entendí. ¿Podrías reformular tu pregunta?"
 
-    # --- 5) Procesamiento de imagen (OCR + GPT) ---
-    if tipo == "image":
-        try:
-            ocr_resp = requests.post(
-                OCR_SERVICE_URL,
-                json={'image_base64': contenido},
-                timeout=10
-            )
-            ocr_resp.raise_for_status()
-            texto_ocr = ocr_resp.json().get("text","").strip()
-            if not texto_ocr:
-                raise ValueError("OCR vacío")
-        except:
-            return "No pudimos procesar tu orden médica."
-
-        prompt = (
-            "Analiza esta orden médica y devuelve un JSON con las claves:\n"
-            "estudios, cobertura, afiliado.\n\n" + texto_ocr
-        )
-        try:
-            gpt = openai.ChatCompletion.create(
-                model="gpt-4",
-                messages=[{"role":"user","content":prompt}],
-                temperature=0.0
-            )
-            datos = json.loads(gpt.choices[0].message.content.strip())
-        except:
-            return "Error interpretando tu orden médica."
-
-        paciente.update({
-            "estudios":      datos.get("estudios"),
-            "cobertura":     datos.get("cobertura"),
-            "afiliado":      datos.get("afiliado"),
-            "imagen_base64": contenido
-        })
-        save_paciente(from_number, paciente)
-
-        # tras OCR, solicitamos estudios manual si faltan
-        if not paciente.get("estudios"):
-            paciente["estado"] = "esperando_estudios_manual"
-            save_paciente(from_number, paciente)
-            return "Por favor confírmanos los estudios solicitados:"
-
-        # si ya vienen estudios desde OCR, cerramos turno
-        sede, dir_sede = determinar_sede(paciente["localidad"])
-        if paciente["tipo_atencion"] == "SEDE":
-            texto_fin = (
-                f"El pre-ingreso se realizó correctamente. Te esperamos en la sede {sede} "
-                f"({dir_sede}) de 07:40 a 11:00. Las prácticas quedan sujetas a autorización del prestador."
-            )
-        else:
-            dia = determinar_dia_turno(paciente["localidad"])
-            texto_fin = (
-                f"Tu turno se reservó para el día {dia}, te visitaremos de 08:00 a 11:00. "
-                "Las prácticas quedan sujetas a autorización del prestador."
-            )
-        clear_paciente(from_number)
-        return texto_fin
-
     return "No pude procesar tu mensaje."
 
 # -------------------------------------------------------------------------------
-# Webhook WhatsApp (GET=verificación, POST=evento)
+# Webhook WhatsApp (verificación y eventos)
 # -------------------------------------------------------------------------------
 @app.route("/webhook", methods=["GET","POST"])
 def webhook_whatsapp():
@@ -385,7 +395,7 @@ def webhook_whatsapp():
     return Response("OK", status=200)
 
 # -------------------------------------------------------------------------------
-# Demo Web (“/” y “/chat” con session_id)
+# Demo Web (“/” y “/chat”)
 # -------------------------------------------------------------------------------
 @app.route("/", methods=["GET"])
 def serve_root():
@@ -400,7 +410,7 @@ def api_chat():
     data    = request.get_json(force=True)
     session = data.get("session", "demo")
     if "image" in data and (data["image"].startswith("iVBOR") or data["image"].startswith("/9j/")):
-        reply = procesar_mensaje_alia(session, "image", data["image"])
+        reply = handle_image(session, data["image"])
     else:
         msg   = data.get("message","").strip()
         reply = procesar_mensaje_alia(session, "text", msg)
