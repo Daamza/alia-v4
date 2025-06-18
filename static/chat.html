@@ -1,66 +1,71 @@
-<!DOCTYPE html>
-<html lang="es">
+<!doctype html>
+<html>
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>Chat ALIA</title>
+  <meta charset="utf-8"/>
+  <title>ALIA Demo</title>
   <style>
-    body { font-family: Arial, sans-serif; background: #f4f4f4; margin:0; padding:0;
-           display:flex; justify-content:center; align-items:center; height:100vh; }
-    #container { width:400px; background:#fff; border-radius:8px;
-                 box-shadow:0 2px 10px rgba(0,0,0,0.1); display:flex; flex-direction:column; }
-    #msgs { flex:1; padding:16px; overflow-y:auto; }
-    .msg { margin-bottom:12px; }
-    .msg.user { text-align:right; }
-    .msg .txt { display:inline-block; padding:8px 12px; border-radius:16px; max-width:80%; }
-    .msg.user .txt { background:#dcf8c6; }
-    .msg.bot  .txt { background:#ececec; }
-    #entry { display:flex; border-top:1px solid #ddd; }
-    #entry input { flex:1; border:none; padding:12px; font-size:14px; }
-    #entry button{ border:none; background:#4caf50; color:#fff; padding:0 16px; cursor:pointer; }
+    body { font-family: sans-serif; max-width:600px; margin:0 auto; }
+    .chat { border:1px solid #ccc; padding:10px; height:400px; overflow-y:auto; }
+    .user { text-align:right; color:green; margin:5px; }
+    .alia { text-align:left; color:gray; margin:5px; }
+    #controls { margin-top:10px; }
   </style>
 </head>
 <body>
-  <div id="container">
-    <div id="msgs"></div>
-    <div id="entry">
-      <input id="inp" placeholder="Escribe tu mensaje..." autocomplete="off"/>
-      <button id="btn">Enviar</button>
-    </div>
-  </div>
-  <script>
-    const msgs  = document.getElementById('msgs');
-    const inp   = document.getElementById('inp');
-    const btn   = document.getElementById('btn');
+  <h1>ALIA Demo</h1>
+  <div id="chat" class="chat"></div>
 
-    function addMsg(cls, txt) {
-      const d = document.createElement('div');
-      d.className = 'msg ' + cls;
-      d.innerHTML = `<div class="txt"><strong>${cls==='bot'?'ALIA':'Tú'}:</strong> ${txt}</div>`;
-      msgs.appendChild(d);
-      d.scrollIntoView({behavior:'smooth'});
+  <div id="controls">
+    <input id="msg" type="text" placeholder="Escribe tu mensaje…" />
+    <button id="sendMsg">Enviar texto</button>
+    <br/><br/>
+    <input id="imageInput" type="file" accept="image/*"/>
+    <button id="sendImage">Enviar imagen</button>
+  </div>
+
+  <script>
+    const chatEl = document.getElementById('chat');
+    function append(who, text){
+      const div = document.createElement('div');
+      div.className = who==='Tú' ? 'user' : 'alia';
+      div.textContent = `${who}: ${text}`;
+      chatEl.appendChild(div);
+      chatEl.scrollTop = chatEl.scrollHeight;
     }
 
-    async function send() {
-      const text = inp.value.trim();
-      if(!text) return;
-      addMsg('user', text);
-      inp.value='';
-      try {
-        const r = await fetch('/chat', {
+    document.getElementById('sendMsg').onclick = async () => {
+      const input = document.getElementById('msg');
+      const txt = input.value.trim();
+      if(!txt) return;
+      append('Tú', txt);
+      input.value = '';
+      const resp = await fetch('/chat',{
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ message: txt })
+      });
+      const { reply } = await resp.json();
+      append('ALIA', reply);
+    };
+
+    document.getElementById('sendImage').onclick = () => {
+      const file = document.getElementById('imageInput').files[0];
+      if(!file) return alert('Seleccioná un archivo de imagen primero');
+      const reader = new FileReader();
+      reader.onload = async () => {
+        // reader.result = "data:image/png;base64,...."
+        const b64 = reader.result.split(',')[1];
+        append('Tú', '[imagen enviada]');
+        const resp = await fetch('/chat',{
           method:'POST',
           headers:{'Content-Type':'application/json'},
-          body: JSON.stringify({message:text})
+          body: JSON.stringify({ image: b64 })
         });
-        const j = await r.json();
-        addMsg('bot', j.reply);
-      } catch(e) {
-        addMsg('bot', 'Error de conexión');
-      }
-    }
-
-    btn.addEventListener('click', send);
-    inp.addEventListener('keypress', e=>{ if(e.key==='Enter') send(); });
+        const { reply } = await resp.json();
+        append('ALIA', reply);
+      };
+      reader.readAsDataURL(file);
+    };
   </script>
 </body>
 </html>
