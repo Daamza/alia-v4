@@ -366,10 +366,14 @@ def serve_chat():
 @app.route("/chat", methods=["POST"])
 def api_chat():
     data = request.get_json(force=True)
-    user_msg = data.get("message","").strip()
-    reply = procesar_mensaje_alia("demo", "text", user_msg)
+    if "image" in data and data["image"].startswith(("iVBOR","/9j/")):  # base64 heurístico
+        b64 = data["image"]
+        reply = procesar_mensaje_alia("demo", "image", b64)
+    else:
+        user_msg = data.get("message","").strip()
+        reply = procesar_mensaje_alia("demo", "text", user_msg)
     return jsonify({"reply": reply})
-
+    
 # -------------------------------------------------------------------------------
 if __name__ == "__main__":
     puerto = int(os.getenv("PORT", 10000))
