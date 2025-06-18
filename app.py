@@ -19,7 +19,7 @@ META_ACCESS_TOKEN     = os.getenv("META_ACCESS_TOKEN")
 META_PHONE_NUMBER_ID  = os.getenv("META_PHONE_NUMBER_ID")
 OPENAI_API_KEY        = os.getenv("OPENAI_API_KEY")
 REDIS_URL             = os.getenv("REDIS_URL")
-GOOGLE_CREDS_B64      = os.getenv("GOOGLE_CREDENTIALS_BASE64")
+GOOGLE_CREDS_B64      = os.getenv("GOOGLE_CREDS_B64")
 OCR_SERVICE_URL       = os.getenv("OCR_SERVICE_URL", "https://ocr-microsistema.onrender.com/ocr")
 DERIVADOR_SERVICE_URL = os.getenv("DERIVADOR_SERVICE_URL", "https://derivador-service-onrender.com/derivar")
 
@@ -70,7 +70,6 @@ def calcular_edad(fecha_str):
         return None
 
 def siguiente_campo_faltante(paciente):
-    # ahora pedimos SOLO hasta 'afiliado'; 'estudios' se gestiona después del OCR o en manual
     orden = [
         ('nombre',           "Por favor indícanos tu nombre completo:"),
         ('direccion',        "Ahora indícanos tu domicilio:"),
@@ -88,10 +87,12 @@ def siguiente_campo_faltante(paciente):
 def determinar_dia_turno(localidad):
     loc = (localidad or "").lower()
     wd  = datetime.today().weekday()
-    if 'ituzaingó' in loc: return 'Lunes'
-    if 'merlo' in loc or 'padua' in loc: return 'Martes' if wd < 4 else 'Viernes'
-    if 'tesei' in loc or 'hurlingham' in loc: return 'Miércoles' if wd < 4 else 'Sábado'
-    if 'castelar' in loc: return 'Jueves'
+    if 'ituzaingó' in loc:       return 'Lunes'
+    if 'merlo' in loc or 'padua' in loc:
+        return 'Martes' if wd < 4 else 'Viernes'
+    if 'tesei' in loc or 'hurlingham' in loc:
+        return 'Miércoles' if wd < 4 else 'Sábado'
+    if 'castelar' in loc:       return 'Jueves'
     return 'Lunes'
 
 def determinar_sede(localidad):
@@ -132,7 +133,14 @@ def enviar_mensaje_whatsapp(to_number, body_text):
 def procesar_mensaje_alia(from_number: str, tipo: str, contenido: str) -> str:
     paciente = get_paciente(from_number)
 
-    # --- 1) Flujo cuando estamos esperando la orden médica ---
+    # --- 1) Si en cualquier estado dicen “turno” →
+    #      forzamos menú_turno
+    if tipo == "text" and "turno" in contenido.lower():
+        paciente["estado"] = "menu_turno"
+        save_paciente(from_number, paciente)
+        return "¿Dónde prefieres el turno? 1. Sede   2. Domicilio"
+
+    # --- 2) Flujo esperando orden médica ---
     if paciente.get("estado") == "esperando_orden":
         if tipo == "image":
             return procesar_mensaje_alia(from_number, "image", contenido)
@@ -143,7 +151,7 @@ def procesar_mensaje_alia(from_number: str, tipo: str, contenido: str) -> str:
             return "Ok, continuamos sin orden médica. Por favor, escribí los estudios solicitados:"
         return "Por favor envía la foto de tu orden médica o responde 'no' para continuar sin orden."
 
-    # --- 2) Sub-flujo manual de estudios (sin orden) ---
+    # --- 3) Sub-flujo manual de estudios (sin orden) ---
     if paciente.get("estado") == "esperando_estudios_manual" and tipo == "text":
         estudios_raw = contenido.strip()
         prompt = (
@@ -177,10 +185,11 @@ def procesar_mensaje_alia(from_number: str, tipo: str, contenido: str) -> str:
                 f"Tu turno se reservó para el día {dia}, te visitaremos de 08:00 a 11:00. "
                 "Las prácticas quedan sujetas a autorización del prestador."
             )
+
         clear_paciente(from_number)
         return texto_fin
 
-    # --- 3) Procesamiento de texto genérico ---
+    # --- 4) Procesamiento de texto genérico ---
     if tipo == "text":
         texto = contenido.strip()
         lower = texto.lower()
@@ -212,19 +221,10 @@ def procesar_mensaje_alia(from_number: str, tipo: str, contenido: str) -> str:
                 clear_paciente(from_number)
                 return "Te derivo a un operador. En breve te contactarán."
             else:
-                return "Opción no válida. Elige 1, 2 o 3."
+                # aquí cualquier otro texto NO reconocido sigue al fallback GPT
+                pass
 
-        if paciente.get("estado") == "menu_turno":
-            if texto in ("1",) or "sede" in lower:
-                paciente["tipo_atencion"] = "SEDE"
-            elif texto in ("2",) or "domicilio" in lower:
-                paciente["tipo_atencion"] = "DOMICILIO"
-            else:
-                return "Por favor elige 1 o 2."
-            pregunta = siguiente_campo_faltante(paciente)
-            save_paciente(from_number, paciente)
-            return pregunta
-
+        # manejamos flujos de resultados y datos secuenciales
         if paciente.get("estado", "").startswith("esperando_resultados_"):
             campo = paciente["estado"].split("_",1)[1]
             if campo == "nombre":
@@ -256,12 +256,12 @@ def procesar_mensaje_alia(from_number: str, tipo: str, contenido: str) -> str:
             save_paciente(from_number, paciente)
             return "Envía foto de tu orden médica o responde 'no' para continuar sin orden."
 
-        # fallback GPT
+        # --- 5) Fallback GPT para TODO texto no gestionado arriba ---
         edad = calcular_edad(paciente.get("fecha_nacimiento","")) or "desconocida"
         prompt = (
             f"Paciente: {paciente.get('nombre','')} (Edad {edad})\n"
-            f"Pregunta: {texto}\n"
-            "Responde solo si debe ayunar o recolectar orina."
+            f"Pregunta: {texto}\nResponde solo si debe ayunar o recolectar orina "
+            "o indica que no entendiste la pregunta."
         )
         try:
             res = openai.ChatCompletion.create(
@@ -270,9 +270,9 @@ def procesar_mensaje_alia(from_number: str, tipo: str, contenido: str) -> str:
             )
             return res.choices[0].message.content.strip()
         except:
-            return "Error procesando la consulta. Intentá más tarde."
+            return "Lo siento, no entendí. ¿Podrías reformular tu pregunta?"
 
-    # --- 4) Procesamiento de imagen (OCR + GPT) ---
+    # --- 6) Procesamiento de imagen (OCR + GPT) ---
     if tipo == "image":
         try:
             ocr_resp = requests.post(
