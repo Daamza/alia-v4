@@ -224,35 +224,36 @@ def procesar_mensaje_alia(from_number: str, tipo: str, contenido: str) -> str:
             )
 
         if paciente["estado"] == "menu":
-        # opción 1 = “1” o “turno”
-        if texto == "1" or "turno" in lower:
-            paciente["estado"] = "menu_turno"
-            save_paciente(from_number, paciente)
-            return "¿Dónde prefieres el turno? 1. Sede  2. Domicilio"
-        # opción 2 = “2” o “resultados”
-        if texto == "2" or "resultado" in lower:
-            paciente["estado"] = "esperando_resultados_nombre"
-            save_paciente(from_number, paciente)
-            return "Para enviarte resultados, indícanos tu nombre completo:"
-        # opción 3 = “3” o “operador”/“ayuda”/“asistente”
-        if texto == "3" or any(k in lower for k in ["operador","ayuda","asistente"]):
-            clear_paciente(from_number)
-            return "Te derivo a un operador. En breve te contactarán."
-        return "Opción no válida. Elige 1, 2 o 3 o escribe “turno”, “resultados” o “operador”."
+            # opción 1 = “1” o “turno”
+            if texto == "1" or "turno" in lower:
+                paciente["estado"] = "menu_turno"
+                save_paciente(from_number, paciente)
+                return "¿Dónde prefieres el turno? 1. Sede  2. Domicilio"
+            # opción 2 = “2” o “resultados”
+            elif texto == "2" or "resultado" in lower:
+                paciente["estado"] = "esperando_resultados_nombre"
+                save_paciente(from_number, paciente)
+                return "Para enviarte resultados, indícanos tu nombre completo:"
+            # opción 3 = “3” o “operador”/“ayuda”/“asistente”
+            elif texto == "3" or any(k in lower for k in ["operador","ayuda","asistente"]):
+                clear_paciente(from_number)
+                return "Te derivo a un operador. En breve te contactarán."
+            else:
+                return "Opción no válida. Elige 1, 2 o 3 o escribe “turno”, “resultados” o “operador”."
 
         if paciente["estado"] == "menu_turno":
-    # aceptamos 1 o la palabra "sede"
+            # aceptamos 1 o la palabra "sede"
             if texto == "1" or "sede" in lower:
-        paciente["tipo_atencion"] = "SEDE"
-    # aceptamos 2 o la palabra "domicilio"
+                paciente["tipo_atencion"] = "SEDE"
+            # aceptamos 2 o la palabra "domicilio"
             elif texto == "2" or "domicilio" in lower:
-        paciente["tipo_atencion"] = "DOMICILIO"
-    else:
-        return "Por favor elige 1, 2, o escribe “sede” o “domicilio”."
-    pregunta = siguiente_campo_faltante(paciente)
-    save_paciente(from_number, paciente)
-    return pregunta
-    
+                paciente["tipo_atencion"] = "DOMICILIO"
+            else:
+                return "Por favor elige 1, 2, o escribe “sede” o “domicilio”."
+            pregunta = siguiente_campo_faltante(paciente)
+            save_paciente(from_number, paciente)
+            return pregunta
+
         if paciente["estado"] and paciente["estado"].startswith("esperando_") \
            and "resultados" not in paciente["estado"]:
             campo = paciente["estado"].split("_",1)[1]
@@ -303,8 +304,6 @@ def procesar_mensaje_alia(from_number: str, tipo: str, contenido: str) -> str:
 
     # — Imagen —
     if tipo == "image":
-        # En tu webhook descargas y conviertes a base64 y lo pasas aquí como contenido
-        # Para demo:
         return "Orden recibida. (Demo OCR pendiente)"
 
     return "No pude procesar tu mensaje."
@@ -326,10 +325,10 @@ def webhook_whatsapp():
     if data.get("object","").lower() != "whatsapp_business_account":
         return Response("No event", status=200)
 
-    entry    = data["entry"][0]
-    msg      = entry["changes"][0]["value"]["messages"][0]
-    from_nr  = msg["from"]
-    tipo     = msg["type"]
+    entry   = data["entry"][0]
+    msg     = entry["changes"][0]["value"]["messages"][0]
+    from_nr = msg["from"]
+    tipo    = msg["type"]
 
     if tipo == "text":
         user_text = msg["text"]["body"]
@@ -338,16 +337,16 @@ def webhook_whatsapp():
         return Response("OK", status=200)
 
     if tipo == "image":
-        # Descargar y convertir a base64:
         media_id = msg["image"]["id"]
-        meta = requests.get(
+        meta     = requests.get(
             f"https://graph.facebook.com/v16.0/{media_id}",
-            params={"access_token": META_ACCESS_TOKEN}
+            params={"access_token": META_ACCESS_TOKEN},
+            timeout=5
         ).json()
         media_url = meta.get("url")
-        img = requests.get(media_url).content
-        b64 = base64.b64encode(img).decode()
-        reply = procesar_mensaje_alia(from_nr, "image", b64)
+        img       = requests.get(media_url, timeout=10).content
+        b64       = base64.b64encode(img).decode()
+        reply     = procesar_mensaje_alia(from_nr, "image", b64)
         enviar_mensaje_whatsapp(from_nr, reply)
         return Response("OK", status=200)
 
