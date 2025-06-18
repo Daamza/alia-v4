@@ -1,14 +1,57 @@
 <!doctype html>
-<html>
+<html lang="es">
 <head>
   <meta charset="utf-8"/>
   <title>ALIA Demo</title>
   <style>
-    body { font-family: sans-serif; max-width:600px; margin:0 auto; }
-    .chat { border:1px solid #ccc; padding:10px; height:400px; overflow-y:auto; }
-    .user { text-align:right; color:green; margin:5px; }
-    .alia { text-align:left; color:gray; margin:5px; }
-    #controls { margin-top:10px; }
+    body {
+      font-family: sans-serif;
+      max-width: 600px;
+      margin: 20px auto;
+      display: flex;
+      flex-direction: column;
+      height: 90vh;
+    }
+    h1 {
+      text-align: center;
+      margin-bottom: 10px;
+    }
+    .chat {
+      flex: 1;
+      border: 1px solid #ccc;
+      padding: 10px;
+      overflow-y: auto;
+      background: #f9f9f9;
+    }
+    .user {
+      text-align: right;
+      color: #006600;
+      margin: 5px 0;
+    }
+    .alia {
+      text-align: left;
+      color: #333;
+      margin: 5px 0;
+    }
+    #controls {
+      margin-top: 10px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    #controls input[type="text"] {
+      flex: none;
+      padding: 8px;
+      font-size: 1rem;
+    }
+    #controls button {
+      padding: 8px;
+      font-size: 1rem;
+      cursor: pointer;
+    }
+    #controls input[type="file"] {
+      font-size: 0.9rem;
+    }
   </style>
 </head>
 <body>
@@ -16,18 +59,22 @@
   <div id="chat" class="chat"></div>
 
   <div id="controls">
-    <input id="msg" type="text" placeholder="Escribe tu mensaje…" />
-    <button id="sendMsg">Enviar texto</button>
-    <br/><br/>
-    <input id="imageInput" type="file" accept="image/*"/>
-    <button id="sendImage">Enviar imagen</button>
+    <div style="display:flex; gap:8px;">
+      <input id="msg" type="text" placeholder="Escribe tu mensaje…" style="flex:1"/>
+      <button id="sendMsg">Enviar texto</button>
+    </div>
+    <div style="display:flex; gap:8px; align-items:center;">
+      <input id="imageInput" type="file" accept="image/*"/>
+      <button id="sendImage">Enviar imagen</button>
+    </div>
   </div>
 
   <script>
     const chatEl = document.getElementById('chat');
+
     function append(who, text){
       const div = document.createElement('div');
-      div.className = who==='Tú' ? 'user' : 'alia';
+      div.className = who === 'Tú' ? 'user' : 'alia';
       div.textContent = `${who}: ${text}`;
       chatEl.appendChild(div);
       chatEl.scrollTop = chatEl.scrollHeight;
@@ -36,33 +83,44 @@
     document.getElementById('sendMsg').onclick = async () => {
       const input = document.getElementById('msg');
       const txt = input.value.trim();
-      if(!txt) return;
+      if (!txt) return;
       append('Tú', txt);
       input.value = '';
-      const resp = await fetch('/chat',{
-        method:'POST',
-        headers:{'Content-Type':'application/json'},
+
+      const resp = await fetch('/chat', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
         body: JSON.stringify({ message: txt })
       });
       const { reply } = await resp.json();
-      append('ALIA', reply);
+
+      setTimeout(() => {
+        append('ALIA', reply);
+      }, 3000);
     };
 
     document.getElementById('sendImage').onclick = () => {
       const file = document.getElementById('imageInput').files[0];
-      if(!file) return alert('Seleccioná un archivo de imagen primero');
+      if (!file) {
+        alert('Seleccioná primero una imagen');
+        return;
+      }
       const reader = new FileReader();
       reader.onload = async () => {
         // reader.result = "data:image/png;base64,...."
         const b64 = reader.result.split(',')[1];
         append('Tú', '[imagen enviada]');
-        const resp = await fetch('/chat',{
-          method:'POST',
-          headers:{'Content-Type':'application/json'},
+
+        const resp = await fetch('/chat', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
           body: JSON.stringify({ image: b64 })
         });
         const { reply } = await resp.json();
-        append('ALIA', reply);
+
+        setTimeout(() => {
+          append('ALIA', reply);
+        }, 3000);
       };
       reader.readAsDataURL(file);
     };
