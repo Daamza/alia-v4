@@ -1,49 +1,91 @@
-<!-- static/chat.html -->
 <!DOCTYPE html>
 <html lang="es">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>ALIA Demo</title>
   <style>
-    body { margin:0; padding:0; font-family:sans-serif; background:#f5f5f5; }
-    .header { background:#4CAF50; color:#fff; padding:10px; text-align:center; }
-    .chat-container { 
-      height: calc(100vh - 120px); 
-      overflow-y:auto; 
-      display:flex; 
-      flex-direction:column; 
-      padding:10px;
+    body {
+      margin: 0;
+      padding: 0;
+      font-family: sans-serif;
+      background: #f5f5f5;
+      display: flex;
+      flex-direction: column;
+      height: 100vh;
     }
-    .bubble { max-width:80%; margin:5px 0; padding:10px; border-radius:10px; }
-    .bot  { background:#fff; align-self:flex-start; }
-    .user { background:#DCF8C6; align-self:flex-end; }
+    .header {
+      background: #4CAF50;
+      color: #fff;
+      padding: 10px;
+      text-align: center;
+      flex: 0 0 auto;
+    }
+    .chat-container {
+      flex: 1 1 auto;               /* ocupa todo el espacio disponible */
+      overflow-y: auto;             /* activa scroll vertical */
+      padding: 10px;
+      display: flex;
+      flex-direction: column;
+      scroll-behavior: smooth;      /* para que el scroll sea suave */
+    }
+    /* Opcional: estilos para la barra de scroll */
+    .chat-container::-webkit-scrollbar {
+      width: 6px;
+    }
+    .chat-container::-webkit-scrollbar-thumb {
+      background: rgba(0,0,0,0.2);
+      border-radius: 3px;
+    }
+
+    .bubble {
+      max-width: 80%;
+      margin: 5px 0;
+      padding: 10px;
+      border-radius: 10px;
+      word-break: break-word;
+    }
+    .bot  { background: #fff;      align-self: flex-start; }
+    .user { background: #DCF8C6;   align-self: flex-end;   }
+
     .input-container {
-      position:fixed; bottom:0; left:0; right:0;
-      display:flex; padding:10px; background:#fff;
+      flex: 0 0 auto;
+      display: flex;
+      padding: 10px;
+      background: #fff;
       box-shadow: 0 -1px 5px rgba(0,0,0,0.1);
     }
     .input-container input {
-      flex:1; padding:10px; border:1px solid #ccc; border-radius:5px;
-      font-size:1rem;
+      flex: 1;
+      padding: 10px;
+      border: 1px solid #ccc;
+      border-radius: 5px;
+      font-size: 1rem;
+      outline: none;
     }
     .input-container button {
-      margin-left:5px; padding:10px 15px; border:none;
-      background:#4CAF50; color:#fff; border-radius:5px;
-      font-size:1rem; cursor:pointer;
+      margin-left: 5px;
+      padding: 10px 15px;
+      border: none;
+      background: #4CAF50;
+      color: #fff;
+      border-radius: 5px;
+      font-size: 1rem;
+      cursor: pointer;
     }
   </style>
 </head>
 <body>
   <div class="header"><h2>ALIA Demo</h2></div>
   <div id="chat" class="chat-container"></div>
+
   <div class="input-container">
     <input id="message" type="text" placeholder="Escribe tu mensaje..." autocomplete="off"/>
     <button id="send">Enviar</button>
   </div>
 
   <script>
-    // Generar o leer sessionId por pestaña
+    // Sesión por pestaña
     let sessionId = localStorage.getItem("ALIA_sessionId");
     if (!sessionId) {
       sessionId = crypto.randomUUID();
@@ -56,6 +98,7 @@
       div.className = `bubble ${cls}`;
       div.textContent = text;
       chat.append(div);
+      // baja siempre hasta el final:
       chat.scrollTop = chat.scrollHeight;
     }
 
@@ -66,9 +109,10 @@
       appendBubble("Tú: " + txt, "user");
       inp.value = "";
 
-      // Mensaje “typing…”
       appendBubble("ALIA: escribiendo…", "bot");
+
       setTimeout(async () => {
+        // quita indicador de "escribiendo…"
         chat.lastChild.remove();
         const res = await fetch("/chat", {
           method: "POST",
@@ -80,7 +124,7 @@
       }, 3000);
     });
 
-    // Enter para enviar
+    // enter = enviar
     document.getElementById("message").addEventListener("keydown", e => {
       if (e.key === "Enter") {
         e.preventDefault();
