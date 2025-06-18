@@ -26,7 +26,7 @@ OCR_SERVICE_URL         = os.getenv(
 )
 DERIVADOR_SERVICE_URL   = os.getenv(
     "DERIVADOR_SERVICE_URL",
-    "https://derivador-service.onrender.com/derivar"
+    "https://derivador-service-onrender.com/derivar"
 )
 
 # --- Inicialización de clientes ----------------------------------------------
@@ -304,7 +304,7 @@ def procesar_mensaje_alia(from_number: str, tipo: str, contenido: str) -> str:
 
     # — Imagen (orden médica) —
     if tipo == "image":
-        # `contenido` ya es el base64 puro (sin data:…)
+        # `contenido` ya es el base64 puro
         # 1) OCR
         try:
             ocr_resp = requests.post(
@@ -316,8 +316,7 @@ def procesar_mensaje_alia(from_number: str, tipo: str, contenido: str) -> str:
             texto_ocr = ocr_resp.json().get("text","").strip()
             if not texto_ocr:
                 raise ValueError("OCR vacío")
-        except Exception as e:
-            # limpia sesión si quieres: clear_paciente(from_number)
+        except Exception:
             return "No pudimos procesar tu orden médica."
 
         # 2) GPT extrae el JSON
@@ -333,7 +332,7 @@ def procesar_mensaje_alia(from_number: str, tipo: str, contenido: str) -> str:
                 temperature=0.0
             )
             datos = json.loads(gpt.choices[0].message.content.strip())
-        except Exception as e:
+        except Exception:
             return "Error interpretando tu orden médica."
 
         # 3) Guarda en sesión
@@ -349,25 +348,29 @@ def procesar_mensaje_alia(from_number: str, tipo: str, contenido: str) -> str:
         # 4) Pregunta siguiente campo o cierra turno
         siguiente = siguiente_campo_faltante(paciente)
         if siguiente:
-            # si faltan datos, muestro lo detectado + siguiente pregunta
             return (
                 f"Detectamos:\n{json.dumps(datos, ensure_ascii=False)}\n\n"
                 f"{siguiente}"
             )
-        # si ya está todo, reservado el turno:
+
+        # 5) Mensaje final con aclaración de autorización
         sede, dir_sede = determinar_sede(paciente["localidad"])
         if paciente["tipo_atencion"] == "SEDE":
             texto_fin = (
                 f"El pre-ingreso se realizó correctamente. "
-                f"Te esperamos en la sede {sede} ({dir_sede}) de 07:40 a 11:00."
+                f"Te esperamos en la sede {sede} ({dir_sede}) de 07:40 a 11:00. "
+                "Las prácticas quedan sujetas a autorización del prestador."
             )
         else:
             dia = determinar_dia_turno(paciente["localidad"])
             texto_fin = (
-                f"Tu turno se reservó para el día {dia}, te visitaremos de 08:00 a 11:00."
+                f"Tu turno se reservó para el día {dia}, te visitaremos de 08:00 a 11:00. "
+                "Las prácticas quedan sujetas a autorización del prestador."
             )
+
         clear_paciente(from_number)
         return texto_fin
+
 # -------------------------------------------------------------------------------
 # Webhook WhatsApp: GET verifica, POST procesa y envía
 # -------------------------------------------------------------------------------
@@ -433,7 +436,7 @@ def api_chat():
         user_msg = data.get("message","").strip()
         reply = procesar_mensaje_alia("demo", "text", user_msg)
     return jsonify({"reply": reply})
-    
+
 # -------------------------------------------------------------------------------
 if __name__ == "__main__":
     puerto = int(os.getenv("PORT", 10000))
