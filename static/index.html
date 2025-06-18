@@ -1,30 +1,50 @@
 <!DOCTYPE html>
 <html lang="es">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Tu Laboratorio</title>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Laboratorio de Análisis Bioquímicos</title>
   <style>
     body {
+      font-family: sans-serif;
       background: #fafafa;
       margin: 0; padding: 0;
-      font-family: Arial, sans-serif;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
+      display: flex; justify-content: center; align-items: center;
+      height: 100vh;
+    }
+    .container {
+      width: 90%; max-width: 800px;
+      background: white;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+      padding: 24px;
+      border-radius: 8px;
     }
     h1 {
-      margin: 40px 0;
+      text-align: center;
+      margin-bottom: 24px;
       color: #333;
-      font-size: 2.5rem;
-      text-transform: uppercase;
+    }
+    /* Aquí incrustamos el widget */
+    #alia-widget {
+      height: 60vh; /* tú puedes ajustar la proporción */
+      border: 1px solid #ddd;
+      border-radius: 6px;
+      overflow: hidden;
     }
   </style>
 </head>
 <body>
-  <h1>EL NOMBRE DE TU LABORATORIO</h1>
-
-  <!-- Aquí inyectamos el launcher flotante y el chat embebido -->
-  <script src="/widget.js"></script>
+  <div class="container">
+    <h1>Laboratorio de Análisis Bioquímicos</h1>
+    <div id="alia-widget">
+      <!-- el chat.html se carga dentro de un iframe -->
+      <iframe
+        src="/chat"
+        frameborder="0"
+        width="100%"
+        height="100%">
+      </iframe>
+    </div>
+  </div>
 </body>
 </html>
