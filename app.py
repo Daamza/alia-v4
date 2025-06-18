@@ -1,6 +1,8 @@
 import os
 import json
 import base64
+import io
+import time
 import requests
 import redis
 import unicodedata
@@ -8,6 +10,7 @@ from datetime import datetime
 from flask import Flask, request, Response, send_from_directory, jsonify
 
 import openai
+from PIL import Image, ImageOps
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 from google.oauth2 import service_account
@@ -39,9 +42,36 @@ def normalize(text: str) -> str:
                       .lower()
 
 # -------------------------------------------------------------------------------
+# Preprocesamiento y llamada OCR
+# -------------------------------------------------------------------------------
+def preprocess_for_ocr(b64str: str) -> str:
+    data = base64.b64decode(b64str)
+    img = Image.open(io.BytesIO(data))
+    img.thumbnail((1024, 1024))
+    img = ImageOps.grayscale(img)
+    img = img.point(lambda x: 0 if x < 128 else 255, '1')
+    buf = io.BytesIO()
+    img.save(buf, format='PNG')
+    return base64.b64encode(buf.getvalue()).decode()
+
+def call_ocr(b64: str) -> str:
+    for i in range(3):
+        try:
+            resp = requests.post(
+                OCR_SERVICE_URL,
+                json={'image_base64': b64},
+                timeout=15
+            )
+            resp.raise_for_status()
+            return resp.json().get("text", "").strip()
+        except Exception:
+            time.sleep(2 ** i)
+    return ""
+
+# -------------------------------------------------------------------------------
 # Funciones de sesión
 # -------------------------------------------------------------------------------
-def get_paciente(tel):
+def get_paciente(tel: str) -> dict:
     data = r.get(f"paciente:{tel}")
     if data:
         return json.loads(data)
@@ -61,16 +91,16 @@ def get_paciente(tel):
     r.set(f"paciente:{tel}", json.dumps(p))
     return p
 
-def save_paciente(tel, info):
+def save_paciente(tel: str, info: dict):
     r.set(f"paciente:{tel}", json.dumps(info))
 
-def clear_paciente(tel):
+def clear_paciente(tel: str):
     r.delete(f"paciente:{tel}")
 
 # -------------------------------------------------------------------------------
 # Utilidades generales
 # -------------------------------------------------------------------------------
-def calcular_edad(fecha_str):
+def calcular_edad(fecha_str: str) -> int:
     try:
         nac = datetime.strptime(fecha_str, '%d/%m/%Y')
         hoy = datetime.today()
@@ -78,7 +108,7 @@ def calcular_edad(fecha_str):
     except:
         return None
 
-def siguiente_campo_faltante(paciente):
+def siguiente_campo_faltante(paciente: dict) -> str:
     orden = [
         ('nombre',           "Por favor indícanos tu nombre completo:"),
         ('direccion',        "Ahora indícanos tu domicilio:"),
@@ -93,7 +123,7 @@ def siguiente_campo_faltante(paciente):
             return pregunta
     return None
 
-def determinar_dia_turno(localidad):
+def determinar_dia_turno(localidad: str) -> str:
     loc = normalize(localidad)
     wd  = datetime.today().weekday()
     if 'ituzaingo' in loc:       return 'Lunes'
@@ -104,7 +134,7 @@ def determinar_dia_turno(localidad):
     if 'castelar' in loc:        return 'Jueves'
     return 'Lunes'
 
-def determinar_sede(localidad):
+def determinar_sede(localidad: str) -> tuple:
     loc = normalize(localidad)
     if loc in ['castelar','ituzaingo','moron']:
         return 'CASTELAR', 'Arias 2530'
@@ -117,7 +147,7 @@ def determinar_sede(localidad):
 # -------------------------------------------------------------------------------
 # Envío WhatsApp (Cloud API)
 # -------------------------------------------------------------------------------
-def enviar_mensaje_whatsapp(to_number, body_text):
+def enviar_mensaje_whatsapp(to_number: str, body_text: str):
     url = f"https://graph.facebook.com/v16.0/{META_PHONE_NUMBER_ID}/messages"
     headers = {
         "Authorization": f"Bearer {META_ACCESS_TOKEN}",
@@ -139,23 +169,20 @@ def enviar_mensaje_whatsapp(to_number, body_text):
 # -------------------------------------------------------------------------------
 # Procesamiento de imagen (OCR + GPT)
 # -------------------------------------------------------------------------------
-def handle_image(from_number, b64):
+def handle_image(from_number: str, b64: str) -> str:
     paciente = get_paciente(from_number)
-    try:
-        ocr_resp = requests.post(
-            OCR_SERVICE_URL,
-            json={'image_base64': b64},
-            timeout=10
-        )
-        ocr_resp.raise_for_status()
-        texto_ocr = ocr_resp.json().get("text","").strip()
-        if not texto_ocr:
-            raise ValueError("OCR vacío")
-    except Exception:
-        return "No pudimos procesar tu orden médica."
 
+    # Preprocesa la imagen
+    b64_pre = preprocess_for_ocr(b64)
+
+    # Llama al OCR remoto con retry
+    texto_ocr = call_ocr(b64_pre)
+    if not texto_ocr:
+        return "No pudimos procesar tu orden médica, ¿podrías enviarla con mejor iluminación?"
+
+    # GPT extrae JSON
     prompt = (
-        "Analiza esta orden médica y devuelve un JSON con claves:\n"
+        "Analiza esta orden médica y devuelve un JSON con las claves:\n"
         "estudios, cobertura, afiliado.\n\n" + texto_ocr
     )
     try:
@@ -178,10 +205,9 @@ def handle_image(from_number, b64):
 
     siguiente = siguiente_campo_faltante(paciente)
     if siguiente:
-        return (
-            f"Detectamos:\n{json.dumps(datos, ensure_ascii=False)}\n\n{siguiente}"
-        )
+        return f"Detectamos:\n{json.dumps(datos, ensure_ascii=False)}\n\n{siguiente}"
 
+    # Cierra turno
     sede, dir_sede = determinar_sede(paciente["localidad"])
     if paciente["tipo_atencion"] == "SEDE":
         texto_fin = (
@@ -357,7 +383,7 @@ def procesar_mensaje_alia(from_number: str, tipo: str, contenido: str) -> str:
             save_paciente(from_number, paciente)
             return "Envía foto de tu orden médica o responde 'no' para continuar sin orden."
 
-        # fallback GPT
+        # fallback GPT para ayuno/orina
         edad = calcular_edad(paciente.get("fecha_nacimiento","")) or "desconocida"
         prompt = (
             f"Paciente: {paciente.get('nombre','')} (Edad {edad})\n"
