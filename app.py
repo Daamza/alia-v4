@@ -335,23 +335,25 @@ def procesar_mensaje_alia(from_number: str, tipo: str, contenido: str) -> str:
             save_paciente(from_number, paciente)
             return "Envía foto de tu orden médica o responde 'no' para continuar sin orden."
 
-        # fallback GPT
+        # fallback GPT específico para ayuno u orina
         edad = calcular_edad(paciente.get("fecha_nacimiento","")) or "desconocida"
         prompt = (
             f"Paciente: {paciente.get('nombre','')} (Edad {edad})\n"
-            f"Pregunta: {texto}\n"
-            "Responde con la mejor respuesta o di que no entendiste."
+            f"Consulta: {texto}\n\n"
+            "Eres un asistente de laboratorio. "
+            "Si la consulta corresponde a preparación para una prueba de laboratorio, "
+            "responde especificando SI se debe realizar AYUNO (y cuántas horas) o RECOLECCIÓN DE ORINA. "
+            "Si no aplica a ninguna de estas dos instrucciones, di brevemente que no tienes información específica."
         )
         try:
-            res = openai.ChatCompletion.create(
+            resp = openai.ChatCompletion.create(
                 model="gpt-4",
-                messages=[{"role":"user","content":prompt}]
+                messages=[{"role":"user","content":prompt}],
+                temperature=0
             )
-            return res.choices[0].message.content.strip()
-        except:
-            return "Lo siento, no entendí. ¿Podrías reformular tu pregunta?"
-
-    return "No pude procesar tu mensaje."
+            return resp.choices[0].message.content.strip()
+        except Exception:
+            return "Lo siento, no entendí tu consulta. ¿Podrías reformularla?"
 
 # -------------------------------------------------------------------------------
 # Webhook WhatsApp (verificación y eventos)
