@@ -224,19 +224,35 @@ def procesar_mensaje_alia(from_number: str, tipo: str, contenido: str) -> str:
             )
 
         if paciente["estado"] == "menu":
-            if texto == "1":
-                paciente["estado"] = "menu_turno"
-                save_paciente(from_number, paciente)
-                return "¿Dónde prefieres el turno? 1. Sede  2. Domicilio"
-            if texto == "2":
-                paciente["estado"] = "esperando_resultados_nombre"
-                save_paciente(from_number, paciente)
-                return "Para resultados, indícanos tu nombre completo:"
-            if texto == "3":
-                clear_paciente(from_number)
-                return "Te derivo a un operador. En breve te contactarán."
-            return "Opción no válida. Elige 1, 2 o 3."
+        # opción 1 = “1” o “turno”
+        if texto == "1" or "turno" in lower:
+            paciente["estado"] = "menu_turno"
+            save_paciente(from_number, paciente)
+            return "¿Dónde prefieres el turno? 1. Sede  2. Domicilio"
+        # opción 2 = “2” o “resultados”
+        if texto == "2" or "resultado" in lower:
+            paciente["estado"] = "esperando_resultados_nombre"
+            save_paciente(from_number, paciente)
+            return "Para enviarte resultados, indícanos tu nombre completo:"
+        # opción 3 = “3” o “operador”/“ayuda”/“asistente”
+        if texto == "3" or any(k in lower for k in ["operador","ayuda","asistente"]):
+            clear_paciente(from_number)
+            return "Te derivo a un operador. En breve te contactarán."
+        return "Opción no válida. Elige 1, 2 o 3 o escribe “turno”, “resultados” o “operador”."
 
+        if paciente["estado"] == "menu_turno":
+    # aceptamos 1 o la palabra "sede"
+            if texto == "1" or "sede" in lower:
+        paciente["tipo_atencion"] = "SEDE"
+    # aceptamos 2 o la palabra "domicilio"
+            elif texto == "2" or "domicilio" in lower:
+        paciente["tipo_atencion"] = "DOMICILIO"
+    else:
+        return "Por favor elige 1, 2, o escribe “sede” o “domicilio”."
+    pregunta = siguiente_campo_faltante(paciente)
+    save_paciente(from_number, paciente)
+    return pregunta
+    
         if paciente["estado"] and paciente["estado"].startswith("esperando_") \
            and "resultados" not in paciente["estado"]:
             campo = paciente["estado"].split("_",1)[1]
