@@ -302,12 +302,72 @@ def procesar_mensaje_alia(from_number: str, tipo: str, contenido: str) -> str:
         except:
             return "Error procesando la consulta. Intentá más tarde."
 
-    # — Imagen —
+    # — Imagen (orden médica) —
     if tipo == "image":
-        return "Orden recibida. (Demo OCR pendiente)"
+        # `contenido` ya es el base64 puro (sin data:…)
+        # 1) OCR
+        try:
+            ocr_resp = requests.post(
+                OCR_SERVICE_URL,
+                json={'image_base64': contenido},
+                timeout=10
+            )
+            ocr_resp.raise_for_status()
+            texto_ocr = ocr_resp.json().get("text","").strip()
+            if not texto_ocr:
+                raise ValueError("OCR vacío")
+        except Exception as e:
+            # limpia sesión si quieres: clear_paciente(from_number)
+            return "No pudimos procesar tu orden médica."
 
-    return "No pude procesar tu mensaje."
+        # 2) GPT extrae el JSON
+        prompt = (
+            "Analiza esta orden médica y devuelve un JSON con las claves:\n"
+            "estudios, cobertura, afiliado.\n\n" +
+            texto_ocr
+        )
+        try:
+            gpt = openai.ChatCompletion.create(
+                model="gpt-4",
+                messages=[{"role":"user","content":prompt}],
+                temperature=0.0
+            )
+            datos = json.loads(gpt.choices[0].message.content.strip())
+        except Exception as e:
+            return "Error interpretando tu orden médica."
 
+        # 3) Guarda en sesión
+        paciente = get_paciente(from_number)
+        paciente.update({
+            "estudios":      datos.get("estudios"),
+            "cobertura":     datos.get("cobertura"),
+            "afiliado":      datos.get("afiliado"),
+            "imagen_base64": contenido
+        })
+        save_paciente(from_number, paciente)
+
+        # 4) Pregunta siguiente campo o cierra turno
+        siguiente = siguiente_campo_faltante(paciente)
+        if siguiente:
+            # si faltan datos, muestro lo detectado + siguiente pregunta
+            return (
+                f"Detectamos:\n{json.dumps(datos, ensure_ascii=False)}\n\n"
+                f"{siguiente}"
+            )
+        # si ya está todo, reservado el turno:
+        sede, dir_sede = determinar_sede(paciente["localidad"])
+        if paciente["tipo_atencion"] == "SEDE":
+            texto_fin = (
+                f"El pre-ingreso se realizó correctamente. "
+                f"Te esperamos en la sede {sede} ({dir_sede}) de 07:40 a 11:00."
+            )
+        else:
+            dia = determinar_dia_turno(paciente["localidad"])
+            texto_fin = (
+                f"Tu turno se reservó para el día {dia}, te visitaremos de 08:00 a 11:00."
+            )
+        clear_paciente(from_number)
+        return texto_fin
 # -------------------------------------------------------------------------------
 # Webhook WhatsApp: GET verifica, POST procesa y envía
 # -------------------------------------------------------------------------------
