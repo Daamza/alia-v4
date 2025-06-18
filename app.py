@@ -4,7 +4,7 @@ import base64
 import requests
 import redis
 from datetime import datetime
-from flask import Flask, request, Response
+from flask import Flask, request, Response, send_from_directory, jsonify
 
 import openai
 import gspread
@@ -30,14 +30,11 @@ DERIVADOR_SERVICE_URL   = os.getenv(
 )
 
 # --- Inicialización de clientes ----------------------------------------------
-# OpenAI
 openai.api_key = OPENAI_API_KEY
-
-# Redis
 r = redis.from_url(REDIS_URL, decode_responses=True)
 
-# Flask
-app = Flask(__name__)
+# Flask: indicamos carpeta static para servir chat.html
+app = Flask(__name__, static_folder='static')
 
 # -------------------------------------------------------------------------------
 # Funciones de sesión
@@ -70,7 +67,7 @@ def clear_paciente(tel):
     r.delete(f"paciente:{tel}")
 
 # -------------------------------------------------------------------------------
-# Función para calcular edad
+# Utilidad: calcular edad
 # -------------------------------------------------------------------------------
 def calcular_edad(fecha_str):
     try:
@@ -96,6 +93,7 @@ def crear_hoja_del_dia(dia):
         scopes=["https://www.googleapis.com/auth/drive"]
     )
     drive_svc = build('drive', 'v3', credentials=creds_drive)
+
     folder_id = None
     try:
         res = drive_svc.files().list(
@@ -163,7 +161,7 @@ def derivar_a_operador(payload):
         print("Error al derivar a operador:", e)
 
 # -------------------------------------------------------------------------------
-# Envío de WhatsApp (Cloud API)
+# Envío de mensajes WhatsApp via Cloud API
 # -------------------------------------------------------------------------------
 def enviar_mensaje_whatsapp(to_number, body_text):
     url = f"https://graph.facebook.com/v16.0/{META_PHONE_NUMBER_ID}/messages"
@@ -173,7 +171,7 @@ def enviar_mensaje_whatsapp(to_number, body_text):
     }
     data = {
         "messaging_product": "whatsapp",
-        "to": to_number,            # corregido typo aquí
+        "to": to_number,
         "type": "text",
         "text": {"body": body_text}
     }
@@ -185,7 +183,7 @@ def enviar_mensaje_whatsapp(to_number, body_text):
         print("Exception enviando WhatsApp:", e)
 
 # -------------------------------------------------------------------------------
-# Siguiente campo faltante (turno)
+# Siguiente campo para turno
 # -------------------------------------------------------------------------------
 def siguiente_campo_faltante(paciente):
     orden = [
@@ -204,27 +202,22 @@ def siguiente_campo_faltante(paciente):
     return None
 
 # -------------------------------------------------------------------------------
-# Webhook WhatsApp (GET para verif, POST para mensajes)
+# Webhook WhatsApp (GET verify, POST messages)
 # -------------------------------------------------------------------------------
 @app.route("/webhook", methods=["GET", "POST"])
 def webhook_whatsapp():
-    # --- Verificación inicial (Facebook) ---
+    # Verificación de Meta (GET)
     if request.method == "GET":
         mode      = request.args.get("hub.mode")
         token     = request.args.get("hub.verify_token")
         challenge = request.args.get("hub.challenge")
         if mode == "subscribe" and token == META_VERIFY_TOKEN:
-            print("Webhook verificado correctamente")
             return Response(challenge, status=200)
-        print("Webhook verificación fallida:", mode, token)
         return Response("Forbidden", status=403)
 
-    # --- Procesamos evento entrante ---
+    # Procesamiento de mensaje entrante (POST)
     data = request.get_json(force=True)
-    print("=== NUEVA PETICIÓN AL WEBHOOK ===\n", json.dumps(data, indent=2, ensure_ascii=False))
-
-    # chequeo object en minúsculas
-    if data.get("object", "").lower() != "whatsapp_business_account":
+    if data.get("object","").lower() != "whatsapp_business_account":
         return Response("No event", status=200)
 
     entry    = data["entry"][0]
@@ -233,13 +226,13 @@ def webhook_whatsapp():
     messages = value.get("messages", [])
     if not messages:
         return Response("No messages", status=200)
-    msg = messages[0]
 
+    msg         = messages[0]
     from_number = msg.get("from")
     tipo        = msg.get("type")
     paciente    = get_paciente(from_number)
 
-    # --- Texto simple ---
+   # --- Texto simple ---
     if tipo == "text":
         texto = msg["text"]["body"].strip()
         lower = texto.lower()
@@ -478,6 +471,21 @@ def webhook_whatsapp():
 
     # resto de tipos: OK
     return Response("OK", status=200)
+
+# -------------------------------------------------------------------------------
+# Interfaz de prueba: servir chat.html & API de demo
+# -------------------------------------------------------------------------------
+@app.route("/chat", methods=["GET"])
+def serve_chat():
+    return send_from_directory(app.static_folder, "chat.html")
+
+@app.route("/chat", methods=["POST"])
+def api_chat():
+    payload = request.get_json(force=True)
+    user_msg = payload.get("message","").strip()
+    # TODO: reemplazar este eco por tu lógica de ALIA:
+    reply = f"ALIA demo: {user_msg}"
+    return jsonify({"reply": reply})
 
 # -------------------------------------------------------------------------------
 if __name__ == "__main__":
