@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Asistente ALIA</title>
+  <style>
+    :root {
+      --color-primario: #c62828;
+      --color-secundario: #f5f5f5;
+      --texto-principal: #333;
+      --texto-oscuro: #444;
+      --blanco: #fff;
+      --gris-claro: #eee;
+      --gris-input: #ddd;
+      --radio: 8px;
+      --fuente-base: 'Helvetica Neue', Arial, sans-serif;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: var(--fuente-base);
+      background: var(--color-secundario);
+      color: var(--texto-principal);
+    }
+    .chat-wrapper {
+      width: 100%;
+      max-width: 480px;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+      background: var(--blanco);
+      margin: 0 auto;
+    }
+    #chat {
+      flex: 1 1 auto;
+      overflow-y: auto;
+      padding: 12px;
+      scroll-behavior: smooth;
+    }
+    .bubble {
+      max-width: 75%;
+      margin: 6px 0;
+      padding: 10px 14px;
+      border-radius: var(--radio);
+      word-break: break-word;
+      line-height: 1.4;
+    }
+    .bot  { background: var(--blanco);   align-self: flex-start; }
+    .user { background: #dcf8c6;         align-self: flex-end;   }
+    .input-container {
+      display: flex;
+      padding: 8px;
+      border-top: 1px solid var(--gris-claro);
+      background: var(--blanco);
+    }
+    .input-container input[type="text"] {
+      flex: 1;
+      padding: 8px 12px;
+      border: 1px solid var(--gris-input);
+      border-radius: var(--radio);
+      font-size: 0.95rem;
+      outline: none;
+    }
+    .input-container button {
+      margin-left: 8px;
+      padding: 8px 12px;
+      border: none;
+      background: var(--color-primario);
+      color: var(--blanco);
+      font-size: 1rem;
+      border-radius: var(--radio);
+      cursor: pointer;
+    }
+    .img-btn-wrapper {
+      position: relative;
+      margin-left: 8px;
+    }
+    #fileInput {
+      position: absolute;
+      top: 0; left: 0;
+      width: 100%; height: 100%;
+      opacity: 0;
+      cursor: pointer;
+    }
+  </style>
+</head>
+<body>
+  <div class="chat-wrapper">
+    <div id="chat"></div>
+    <div class="input-container">
+      <input id="message" type="text" placeholder="Escribe tu mensaje..." autocomplete="off"/>
+      <button id="send">Enviar</button>
+      <div class="img-btn-wrapper">
+        <button id="sendImage">📷</button>
+        <input id="fileInput" type="file" accept="image/*"/>
+      </div>
+    </div>
+  </div>
+  <script>
+    let sessionId = localStorage.getItem("ALIA_sessionId");
+    if (!sessionId) {
+      sessionId = crypto.randomUUID();
+      localStorage.setItem("ALIA_sessionId", sessionId);
+    }
+    const chat = document.getElementById("chat");
+    function appendBubble(content, cls, isImage = false) {
+      const div = document.createElement("div");
+      div.className = `bubble ${cls}`;
+      if (isImage) {
+        const img = document.createElement("img");
+        img.src = content;
+        img.style.maxWidth = "100%";
+        img.style.borderRadius = "6px";
+        div.appendChild(img);
+      } else {
+        div.textContent = content;
+      }
+      chat.appendChild(div);
+      chat.scrollTop = chat.scrollHeight;
+    }
+    async function sendPayload(payload) {
+      appendBubble("ALIA: escribiendo…", "bot");
+      await new Promise(r => setTimeout(r, 3000));
+      chat.lastChild.remove();
+      const res = await fetch("/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ session: sessionId, ...payload })
+      });
+      const data = await res.json();
+      if (data.reply) appendBubble("ALIA: " + data.reply, "bot");
+      if (data.image_url) appendBubble(data.image_url, "bot", true);
+    }
+    document.getElementById("send").addEventListener("click", () => {
+      const inp = document.getElementById("message");
+      const txt = inp.value.trim();
+      if (!txt) return;
+      appendBubble("Tú: " + txt, "user");
+      inp.value = "";
+      sendPayload({ message: txt });
+    });
+    document.getElementById("message").addEventListener("keydown", e => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        document.getElementById("send").click();
+      }
+    });
+    const fileInput = document.getElementById("fileInput");
+    document.getElementById("sendImage").addEventListener("click", () => {
+      fileInput.click();
+    });
+    fileInput.addEventListener("change", () => {
+      const file = fileInput.files[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = () => {
+        const b64 = reader.result.split(",", 2)[1];
+        const imageDataURL = "data:image/jpeg;base64," + b64;
+        appendBubble(imageDataURL, "user", true);
+        sendPayload({ image: b64 });
+      };
+      reader.readAsDataURL(file);
+      fileInput.value = "";
+    });
+  </script>
+</body>
+</html>
