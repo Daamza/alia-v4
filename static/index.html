@@ -197,70 +197,92 @@
   </div>
 
   <script>
-    let sessionId = localStorage.getItem("ALIA_sessionId");
-    if (!sessionId) {
-      sessionId = crypto.randomUUID();
-      localStorage.setItem("ALIA_sessionId", sessionId);
-    }
+  let sessionId = localStorage.getItem("ALIA_sessionId");
+  if (!sessionId) {
+    sessionId = crypto.randomUUID();
+    localStorage.setItem("ALIA_sessionId", sessionId);
+  }
 
-    function toggleChat() {
-      const box = document.getElementById("chatBox");
-      box.style.display = box.style.display === "flex" ? "none" : "flex";
-    }
+  function toggleChat() {
+    const box = document.getElementById("chatBox");
+    box.style.display = box.style.display === "flex" ? "none" : "flex";
+  }
 
-    const chat = document.getElementById("chat");
-    function appendBubble(text, cls) {
-      const div = document.createElement("div");
-      div.className = `bubble ${cls}`;
-      div.textContent = text;
-      chat.append(div);
-      chat.scrollTop = chat.scrollHeight;
-    }
+  const chat = document.getElementById("chat");
 
-    async function sendPayload(payload) {
-      appendBubble("ALIA: escribiendo…", "bot");
-      await new Promise(r => setTimeout(r, 3000));
-      chat.lastChild.remove();
-      const res = await fetch("/chat", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ session: sessionId, ...payload })
-      });
-      const { reply } = await res.json();
-      appendBubble("ALIA: " + reply, "bot");
+  function appendBubble(content, cls, isImage = false) {
+    const div = document.createElement("div");
+    div.className = `bubble ${cls}`;
+    if (isImage) {
+      const img = document.createElement("img");
+      img.src = content;
+      img.style.maxWidth = "100%";
+      img.style.borderRadius = "6px";
+      div.appendChild(img);
+    } else {
+      div.textContent = content;
     }
+    chat.appendChild(div);
+    chat.scrollTop = chat.scrollHeight;
+  }
 
-    document.getElementById("send").addEventListener("click", () => {
-      const inp = document.getElementById("message");
-      const txt = inp.value.trim();
-      if (!txt) return;
-      appendBubble("Tú: " + txt, "user");
-      inp.value = "";
-      sendPayload({ message: txt });
-    });
-    document.getElementById("message").addEventListener("keydown", e => {
-      if (e.key === "Enter") {
-        e.preventDefault();
-        document.getElementById("send").click();
-      }
+  async function sendPayload(payload) {
+    appendBubble("ALIA: escribiendo…", "bot");
+    await new Promise(r => setTimeout(r, 3000));
+    chat.lastChild.remove();
+
+    const res = await fetch("/chat", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ session: sessionId, ...payload })
     });
 
-    const fileInput = document.getElementById("fileInput");
-    document.getElementById("sendImage").addEventListener("click", () => {
-      fileInput.click();
-    });
-    fileInput.addEventListener("change", () => {
-      const file = fileInput.files[0];
-      if (!file) return;
-      const reader = new FileReader();
-      reader.onload = () => {
-        const b64 = reader.result.split(",",2)[1];
-        appendBubble("Tú: [imagen enviada]", "user");
-        sendPayload({ image: b64 });
-      };
-      reader.readAsDataURL(file);
-      fileInput.value = "";
-    });
+    const data = await res.json();
+
+    if (data.reply) {
+      appendBubble("ALIA: " + data.reply, "bot");
+    }
+
+    if (data.image_url) {
+      appendBubble(data.image_url, "bot", true);
+    }
+  }
+
+  document.getElementById("send").addEventListener("click", () => {
+    const inp = document.getElementById("message");
+    const txt = inp.value.trim();
+    if (!txt) return;
+    appendBubble("Tú: " + txt, "user");
+    inp.value = "";
+    sendPayload({ message: txt });
+  });
+
+  document.getElementById("message").addEventListener("keydown", e => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      document.getElementById("send").click();
+    }
+  });
+
+  const fileInput = document.getElementById("fileInput");
+
+  document.getElementById("sendImage").addEventListener("click", () => {
+    fileInput.click();
+  });
+
+  fileInput.addEventListener("change", () => {
+    const file = fileInput.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      const b64 = reader.result.split(",", 2)[1];
+      const imageDataURL = "data:image/jpeg;base64," + b64;
+      appendBubble(imageDataURL, "user", true);
+      sendPayload({ image: b64 });
+    };
+    reader.readAsDataURL(file);
+    fileInput.value = "";
+  });
   </script>
 </body>
 </html>
