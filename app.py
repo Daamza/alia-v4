@@ -19,7 +19,7 @@ META_ACCESS_TOKEN     = os.getenv("META_ACCESS_TOKEN")
 META_PHONE_NUMBER_ID  = os.getenv("META_PHONE_NUMBER_ID")
 OPENAI_API_KEY        = os.getenv("OPENAI_API_KEY")
 REDIS_URL             = os.getenv("REDIS_URL")
-GOOGLE_CREDS_B64      = os.getenv("GOOGLE_CREDENTIALS_BASE64")
+GOOGLE_CREDS_B64      = os.getenv("GOOGLE_CREDS_BASE64")
 OCR_SERVICE_URL       = os.getenv(
     "OCR_SERVICE_URL",
     "https://ocr-microsistema.onrender.com/ocr"
@@ -75,14 +75,17 @@ def calcular_edad(fecha_str):
         return None
 
 def siguiente_campo_faltante(paciente):
+    """
+    Quitamos 'estudios' de aquí: sólo pide
+    nombre, dirección, localidad, fecha, cobertura y afiliado.
+    """
     orden = [
         ('nombre',           "Por favor indícanos tu nombre completo:"),
         ('direccion',        "Ahora indícanos tu domicilio (calle y altura):"),
         ('localidad',        "¿En qué localidad vivís?"),
         ('fecha_nacimiento', "Por favor indícanos tu fecha de nacimiento (dd/mm/aaaa):"),
         ('cobertura',        "¿Cuál es tu cobertura médica?"),
-        ('afiliado',         "¿Cuál es tu número de afiliado?"),
-        ('estudios',         "Por favor confírmanos los estudios solicitados:")
+        ('afiliado',         "¿Cuál es tu número de afiliado?")
     ]
     for campo, pregunta in orden:
         if not paciente.get(campo):
@@ -146,7 +149,7 @@ def derivar_a_operador(payload):
 def procesar_mensaje_alia(from_number: str, tipo: str, contenido: str) -> str:
     paciente = get_paciente(from_number)
 
-    # 0) Imagen siempre antes del flujo de texto para evitar recursión
+    # --- Imagen: OCR + GPT (entrada prioritaria) ---
     if tipo == "image":
         try:
             ocr_resp = requests.post(
@@ -175,35 +178,30 @@ def procesar_mensaje_alia(from_number: str, tipo: str, contenido: str) -> str:
         except:
             return "Error interpretando tu orden médica."
 
+        # guardo cobertura, afiliado y estudios ya detectados
         paciente.update({
-            "estudios":      datos.get("estudios"),
             "cobertura":     datos.get("cobertura"),
             "afiliado":      datos.get("afiliado"),
+            "estudios":      datos.get("estudios"),
             "imagen_base64": contenido
         })
         save_paciente(from_number, paciente)
 
-        siguiente = siguiente_campo_faltante(paciente)
-        if siguiente:
-            return f"Detectamos:\n{json.dumps(datos, ensure_ascii=False)}\n\n{siguiente}"
+        # si faltan campos previos, los pido
+        falta = siguiente_campo_faltante(paciente)
+        if falta:
+            return f"Detectamos:\n{json.dumps(datos, ensure_ascii=False)}\n\n{falta}"
 
-        sede, dir_sede = determinar_sede(paciente["localidad"])
-        if paciente["tipo_atencion"] == "SEDE":
-            texto_fin = (
-                f"El pre-ingreso se realizó correctamente. Te esperamos en la sede {sede} "
-                f"({dir_sede}) de 07:40 a 11:00. Las prácticas quedan sujetas a autorización del prestador."
-            )
-        else:
-            dia = determinar_dia_turno(paciente["localidad"])
-            texto_fin = (
-                f"Tu turno se reservó para el día {dia}, te visitaremos de 08:00 a 11:00. "
-                "Las prácticas quedan sujetas a autorización del prestador."
-            )
-        clear_paciente(from_number)
-        return texto_fin
+        # una vez capturados los datos previos, pido manualmente confirmación de estudios
+        paciente['estado'] = 'esperando_estudios_manual'
+        save_paciente(from_number, paciente)
+        return (
+            f"Detectamos:\n{json.dumps(datos, ensure_ascii=False)}\n\n"
+            "Por favor confírmanos los estudios solicitados:"
+        )
 
-    # 1) Flujo esperando orden médica (texto)
-    if paciente.get("estado") == "esperando_orden":
+    # --- Flujo esperando orden médica (texto) ---
+    if paciente.get("estado") == "esperando_orden" and tipo == "text":
         txt = contenido.strip().lower()
         if txt in ("no", "no tengo orden"):
             paciente["estado"] = "esperando_estudios_manual"
@@ -211,7 +209,7 @@ def procesar_mensaje_alia(from_number: str, tipo: str, contenido: str) -> str:
             return "Ok, continuamos sin orden médica. Por favor, escribí los estudios solicitados:"
         return "Por favor envía la foto de tu orden médica o responde 'no' para continuar sin orden."
 
-    # 2) Sub-flujo manual de estudios (texto)
+    # --- Sub-flujo manual de estudios (después de OCR o "no orden") ---
     if paciente.get("estado") == "esperando_estudios_manual" and tipo == "text":
         estudios_raw = contenido.strip()
         prompt = (
@@ -233,6 +231,7 @@ def procesar_mensaje_alia(from_number: str, tipo: str, contenido: str) -> str:
         paciente["estudios"] = estudios
         save_paciente(from_number, paciente)
 
+        # finalmente, confirmación de turno
         if paciente.get("tipo_atencion") == "SEDE":
             sede, dir_sede = determinar_sede(paciente["localidad"])
             texto_fin = (
@@ -249,7 +248,7 @@ def procesar_mensaje_alia(from_number: str, tipo: str, contenido: str) -> str:
         clear_paciente(from_number)
         return texto_fin
 
-    # 3) Procesamiento de texto genérico
+    # --- Flujo de texto genérico (menú, turnos, resultados, etc.) ---
     if tipo == "text":
         texto = contenido.strip()
         lower = texto.lower()
@@ -263,7 +262,9 @@ def procesar_mensaje_alia(from_number: str, tipo: str, contenido: str) -> str:
             save_paciente(from_number, paciente)
             return (
                 "Hola! Soy ALIA, tu asistente IA de laboratorio. Elige una opción:\n"
-                "1. Pedir un turno\n2. Solicitar envío de resultados\n3. Contactar con un operador"
+                "1. Pedir un turno\n"
+                "2. Solicitar envío de resultados\n"
+                "3. Contactar con un operador"
             )
 
         if paciente.get("estado") == "menu":
@@ -291,7 +292,6 @@ def procesar_mensaje_alia(from_number: str, tipo: str, contenido: str) -> str:
             save_paciente(from_number, paciente)
             return pregunta
 
-        # corregido: siempre usamos get("estado","") antes de .startswith
         if paciente.get("estado", "").startswith("esperando_resultados_"):
             campo = paciente["estado"].split("_",1)[1]
             if campo == "nombre":
@@ -319,29 +319,30 @@ def procesar_mensaje_alia(from_number: str, tipo: str, contenido: str) -> str:
             save_paciente(from_number, paciente)
             if siguiente:
                 return siguiente
+            # una vez completados nombre→afiliado, paso a pedir orden
             paciente["estado"] = "esperando_orden"
             save_paciente(from_number, paciente)
             return "Envía foto de tu orden médica o responde 'no' para continuar sin orden."
 
-        # Fallback GPT
-        prompt_f = (
-            f"Paciente: {paciente.get('nombre','')} (Edad {calcular_edad(paciente.get('fecha_nacimiento','')) or 'desconocida'})\n"
+        # fallback GPT si nada de lo anterior
+        prompt_fallback = (
+            f"Paciente: {paciente.get('nombre','')} "
+            f"(Edad {calcular_edad(paciente.get('fecha_nacimiento','')) or 'desconocida'})\n"
             f"Pregunta: {texto}\nResponde sólo si debe realizar ayuno o recolectar orina."
         )
         try:
-            res = openai.ChatCompletion.create(
+            resp = openai.ChatCompletion.create(
                 model="gpt-4",
-                messages=[{"role":"user","content":prompt_f}]
+                messages=[{"role":"user","content":prompt_fallback}]
             )
-            return res.choices[0].message.content.strip()
+            return resp.choices[0].message.content.strip()
         except:
             return "No entendí tu consulta, ¿podrías reformularla?"
 
-    # 4) Si llegamos aquí, no pudimos procesar el mensaje
     return "No pude procesar tu mensaje."
 
 # -------------------------------------------------------------------------------
-# Webhook WhatsApp (verificación y eventos)
+# Webhook WhatsApp (GET=verif, POST=evento)
 # -------------------------------------------------------------------------------
 @app.route("/webhook", methods=["GET","POST"])
 def webhook_whatsapp():
@@ -382,7 +383,7 @@ def webhook_whatsapp():
     return Response("OK", status=200)
 
 # -------------------------------------------------------------------------------
-# Widget & página de ejemplo
+# Widget y demo web
 # -------------------------------------------------------------------------------
 @app.route("/widget.js")
 def serve_widget():
