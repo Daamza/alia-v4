@@ -20,8 +20,14 @@ META_PHONE_NUMBER_ID  = os.getenv("META_PHONE_NUMBER_ID")
 OPENAI_API_KEY        = os.getenv("OPENAI_API_KEY")
 REDIS_URL             = os.getenv("REDIS_URL")
 GOOGLE_CREDS_B64      = os.getenv("GOOGLE_CREDENTIALS_BASE64")
-OCR_SERVICE_URL       = os.getenv("OCR_SERVICE_URL", "https://ocr-microsistema.onrender.com/ocr")
-DERIVADOR_SERVICE_URL = os.getenv("DERIVADOR_SERVICE_URL", "https://derivador-service.onrender.com/derivar")
+OCR_SERVICE_URL       = os.getenv(
+    "OCR_SERVICE_URL",
+    "https://ocr-microsistema.onrender.com/ocr"
+)
+DERIVADOR_SERVICE_URL = os.getenv(
+    "DERIVADOR_SERVICE_URL",
+    "https://derivador-service.onrender.com/derivar"
+)
 
 # --- Inicialización de clientes ----------------------------------------------
 openai.api_key = OPENAI_API_KEY
@@ -140,9 +146,8 @@ def derivar_a_operador(payload):
 def procesar_mensaje_alia(from_number: str, tipo: str, contenido: str) -> str:
     paciente = get_paciente(from_number)
 
-    # --- 0) Gestión de IMAGEN siempre antes de estados de texto ---
+    # 0) Imagen siempre antes del flujo de texto para evitar recursión
     if tipo == "image":
-        # 1) enviar al OCR
         try:
             ocr_resp = requests.post(
                 OCR_SERVICE_URL,
@@ -156,7 +161,6 @@ def procesar_mensaje_alia(from_number: str, tipo: str, contenido: str) -> str:
         except:
             return "No pudimos procesar tu orden médica."
 
-        # 2) extraer JSON con GPT
         prompt_ocr = (
             "Analiza esta orden médica y devuelve un JSON con las claves:\n"
             "estudios, cobertura, afiliado.\n\n" + texto_ocr
@@ -171,7 +175,6 @@ def procesar_mensaje_alia(from_number: str, tipo: str, contenido: str) -> str:
         except:
             return "Error interpretando tu orden médica."
 
-        # 3) guardar datos y avanzar flujo
         paciente.update({
             "estudios":      datos.get("estudios"),
             "cobertura":     datos.get("cobertura"),
@@ -184,7 +187,6 @@ def procesar_mensaje_alia(from_number: str, tipo: str, contenido: str) -> str:
         if siguiente:
             return f"Detectamos:\n{json.dumps(datos, ensure_ascii=False)}\n\n{siguiente}"
 
-        # 4) si ya había todo, cerramos turno
         sede, dir_sede = determinar_sede(paciente["localidad"])
         if paciente["tipo_atencion"] == "SEDE":
             texto_fin = (
@@ -200,7 +202,7 @@ def procesar_mensaje_alia(from_number: str, tipo: str, contenido: str) -> str:
         clear_paciente(from_number)
         return texto_fin
 
-    # --- 1) Flujo cuando estamos esperando orden médica (texto) ---
+    # 1) Flujo esperando orden médica (texto)
     if paciente.get("estado") == "esperando_orden":
         txt = contenido.strip().lower()
         if txt in ("no", "no tengo orden"):
@@ -209,7 +211,7 @@ def procesar_mensaje_alia(from_number: str, tipo: str, contenido: str) -> str:
             return "Ok, continuamos sin orden médica. Por favor, escribí los estudios solicitados:"
         return "Por favor envía la foto de tu orden médica o responde 'no' para continuar sin orden."
 
-    # --- 2) Sub-flujo manual de estudios (sin orden) ---
+    # 2) Sub-flujo manual de estudios (texto)
     if paciente.get("estado") == "esperando_estudios_manual" and tipo == "text":
         estudios_raw = contenido.strip()
         prompt = (
@@ -231,7 +233,6 @@ def procesar_mensaje_alia(from_number: str, tipo: str, contenido: str) -> str:
         paciente["estudios"] = estudios
         save_paciente(from_number, paciente)
 
-        # mensaje final de preingreso
         if paciente.get("tipo_atencion") == "SEDE":
             sede, dir_sede = determinar_sede(paciente["localidad"])
             texto_fin = (
@@ -248,7 +249,7 @@ def procesar_mensaje_alia(from_number: str, tipo: str, contenido: str) -> str:
         clear_paciente(from_number)
         return texto_fin
 
-    # --- 3) Procesamiento de texto genérico ---
+    # 3) Procesamiento de texto genérico
     if tipo == "text":
         texto = contenido.strip()
         lower = texto.lower()
@@ -257,7 +258,7 @@ def procesar_mensaje_alia(from_number: str, tipo: str, contenido: str) -> str:
             clear_paciente(from_number)
             return "Flujo reiniciado. ¿En qué puedo ayudarte hoy?"
 
-        if paciente["estado"] is None and any(k in lower for k in ["hola","buenas"]):
+        if paciente.get("estado") is None and any(k in lower for k in ["hola","buenas"]):
             paciente["estado"] = "menu"
             save_paciente(from_number, paciente)
             return (
@@ -290,6 +291,7 @@ def procesar_mensaje_alia(from_number: str, tipo: str, contenido: str) -> str:
             save_paciente(from_number, paciente)
             return pregunta
 
+        # corregido: siempre usamos get("estado","") antes de .startswith
         if paciente.get("estado", "").startswith("esperando_resultados_"):
             campo = paciente["estado"].split("_",1)[1]
             if campo == "nombre":
@@ -335,7 +337,7 @@ def procesar_mensaje_alia(from_number: str, tipo: str, contenido: str) -> str:
         except:
             return "No entendí tu consulta, ¿podrías reformularla?"
 
-    # --- 4) Si llegamos aquí, no supimos procesar ---
+    # 4) Si llegamos aquí, no pudimos procesar el mensaje
     return "No pude procesar tu mensaje."
 
 # -------------------------------------------------------------------------------
