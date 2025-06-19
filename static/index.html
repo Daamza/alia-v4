@@ -22,7 +22,6 @@
       background: var(--color-secundario);
       color: var(--texto-principal);
     }
-    a { color: var(--color-primario); text-decoration: none; }
 
     .header {
       background: var(--blanco);
@@ -101,6 +100,7 @@
       overflow: hidden;
       z-index: 999;
     }
+
     #chat {
       flex: 1;
       overflow-y: auto;
@@ -112,6 +112,7 @@
       background: rgba(0,0,0,0.2);
       border-radius: 3px;
     }
+
     .bubble {
       max-width: 75%;
       margin: 6px 0;
@@ -150,6 +151,15 @@
     .img-btn-wrapper {
       position: relative;
       margin-left: 8px;
+    }
+    .img-btn-wrapper button {
+      background: var(--color-primario);
+      border: none;
+      color: var(--blanco);
+      font-size: 1.2rem;
+      padding: 8px 12px;
+      border-radius: var(--radio);
+      cursor: pointer;
     }
     #fileInput {
       position: absolute;
@@ -197,92 +207,92 @@
   </div>
 
   <script>
-  let sessionId = localStorage.getItem("ALIA_sessionId");
-  if (!sessionId) {
-    sessionId = crypto.randomUUID();
-    localStorage.setItem("ALIA_sessionId", sessionId);
-  }
-
-  function toggleChat() {
-    const box = document.getElementById("chatBox");
-    box.style.display = box.style.display === "flex" ? "none" : "flex";
-  }
-
-  const chat = document.getElementById("chat");
-
-  function appendBubble(content, cls, isImage = false) {
-    const div = document.createElement("div");
-    div.className = `bubble ${cls}`;
-    if (isImage) {
-      const img = document.createElement("img");
-      img.src = content;
-      img.style.maxWidth = "100%";
-      img.style.borderRadius = "6px";
-      div.appendChild(img);
-    } else {
-      div.textContent = content;
+    let sessionId = localStorage.getItem("ALIA_sessionId");
+    if (!sessionId) {
+      sessionId = crypto.randomUUID();
+      localStorage.setItem("ALIA_sessionId", sessionId);
     }
-    chat.appendChild(div);
-    chat.scrollTop = chat.scrollHeight;
-  }
 
-  async function sendPayload(payload) {
-    appendBubble("ALIA: escribiendo…", "bot");
-    await new Promise(r => setTimeout(r, 3000));
-    chat.lastChild.remove();
+    function toggleChat() {
+      const box = document.getElementById("chatBox");
+      box.style.display = box.style.display === "flex" ? "none" : "flex";
+    }
 
-    const res = await fetch("/chat", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ session: sessionId, ...payload })
+    const chat = document.getElementById("chat");
+
+    function appendBubble(content, cls, isImage = false) {
+      const div = document.createElement("div");
+      div.className = `bubble ${cls}`;
+      if (isImage) {
+        const img = document.createElement("img");
+        img.src = content;
+        img.style.maxWidth = "100%";
+        img.style.borderRadius = "6px";
+        div.appendChild(img);
+      } else {
+        div.textContent = content;
+      }
+      chat.appendChild(div);
+      chat.scrollTop = chat.scrollHeight;
+    }
+
+    async function sendPayload(payload) {
+      appendBubble("ALIA: escribiendo…", "bot");
+      await new Promise(r => setTimeout(r, 3000));
+      chat.lastChild.remove();
+
+      const res = await fetch("/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ session: sessionId, ...payload })
+      });
+
+      const data = await res.json();
+
+      if (data.reply) {
+        appendBubble("ALIA: " + data.reply, "bot");
+      }
+
+      if (data.image_url) {
+        appendBubble(data.image_url, "bot", true);
+      }
+    }
+
+    document.getElementById("send").addEventListener("click", () => {
+      const inp = document.getElementById("message");
+      const txt = inp.value.trim();
+      if (!txt) return;
+      appendBubble("Tú: " + txt, "user");
+      inp.value = "";
+      sendPayload({ message: txt });
     });
 
-    const data = await res.json();
+    document.getElementById("message").addEventListener("keydown", e => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        document.getElementById("send").click();
+      }
+    });
 
-    if (data.reply) {
-      appendBubble("ALIA: " + data.reply, "bot");
-    }
+    const fileInput = document.getElementById("fileInput");
 
-    if (data.image_url) {
-      appendBubble(data.image_url, "bot", true);
-    }
-  }
+    document.getElementById("sendImage").addEventListener("click", () => {
+      fileInput.click();
+    });
 
-  document.getElementById("send").addEventListener("click", () => {
-    const inp = document.getElementById("message");
-    const txt = inp.value.trim();
-    if (!txt) return;
-    appendBubble("Tú: " + txt, "user");
-    inp.value = "";
-    sendPayload({ message: txt });
-  });
-
-  document.getElementById("message").addEventListener("keydown", e => {
-    if (e.key === "Enter") {
-      e.preventDefault();
-      document.getElementById("send").click();
-    }
-  });
-
-  const fileInput = document.getElementById("fileInput");
-
-  document.getElementById("sendImage").addEventListener("click", () => {
-    fileInput.click();
-  });
-
-  fileInput.addEventListener("change", () => {
-    const file = fileInput.files[0];
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onload = () => {
-      const b64 = reader.result.split(",", 2)[1];
-      const imageDataURL = "data:image/jpeg;base64," + b64;
-      appendBubble(imageDataURL, "user", true);
-      sendPayload({ image: b64 });
-    };
-    reader.readAsDataURL(file);
-    fileInput.value = "";
-  });
+    fileInput.addEventListener("change", () => {
+      const file = fileInput.files[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = () => {
+        const b64 = reader.result.split(",", 2)[1];
+        const imageDataURL = "data:image/jpeg;base64," + b64;
+        appendBubble(imageDataURL, "user", true);
+        sendPayload({ image: b64 });
+      };
+      reader.readAsDataURL(file);
+      fileInput.value = "";
+    });
   </script>
 </body>
 </html>
