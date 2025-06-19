@@ -21,7 +21,7 @@ OPENAI_API_KEY        = os.getenv("OPENAI_API_KEY")
 REDIS_URL             = os.getenv("REDIS_URL")
 GOOGLE_CREDS_B64      = os.getenv("GOOGLE_CREDENTIALS_BASE64")
 OCR_SERVICE_URL       = os.getenv("OCR_SERVICE_URL", "https://ocr-microsistema.onrender.com/ocr")
-DERIVADOR_SERVICE_URL = os.getenv("DERIVADOR_SERVICE_URL", "https://derivador-service.onrender.com/derivar")
+DERIVADOR_SERVICE_URL = os.getenv("DERIVADOR_SERVICE_URL", "https://derivador-service-onrender.com/derivar")
 
 # --- Inicialización de clientes ----------------------------------------------
 openai.api_key = OPENAI_API_KEY
@@ -141,9 +141,8 @@ def procesar_mensaje_alia(from_number: str, tipo: str, contenido: str) -> str:
     paciente = get_paciente(from_number)
 
     # 1) Flujo esperando orden médica
-    if paciente.get("estado", "") == "esperando_orden":
+    if paciente.get("estado") == "esperando_orden":
         if tipo == "image":
-            # reenviar a OCR+GPT
             return procesar_mensaje_alia(from_number, "image", contenido)
         txt = contenido.strip().lower()
         if txt in ("no", "no tengo orden"):
@@ -153,7 +152,7 @@ def procesar_mensaje_alia(from_number: str, tipo: str, contenido: str) -> str:
         return "Por favor envía la foto de tu orden médica o responde 'no' para continuar sin orden."
 
     # 2) Sub-flujo manual de estudios
-    if paciente.get("estado", "") == "esperando_estudios_manual" and tipo == "text":
+    if paciente.get("estado") == "esperando_estudios_manual" and tipo == "text":
         estudios_raw = contenido.strip()
         prompt = (
             "Estos son los estudios solicitados de un paciente:\n"
@@ -162,7 +161,9 @@ def procesar_mensaje_alia(from_number: str, tipo: str, contenido: str) -> str:
         )
         try:
             gpt_resp = openai.ChatCompletion.create(
-                model="gpt-4", messages=[{"role":"user","content":prompt}], temperature=0.0
+                model="gpt-4",
+                messages=[{"role":"user","content":prompt}],
+                temperature=0.0
             )
             datos = json.loads(gpt_resp.choices[0].message.content.strip())
             estudios = datos.get("estudios")
@@ -197,7 +198,7 @@ def procesar_mensaje_alia(from_number: str, tipo: str, contenido: str) -> str:
             clear_paciente(from_number)
             return "Flujo reiniciado. ¿En qué puedo ayudarte hoy?"
 
-        if paciente.get("estado", "") is None and any(k in lower for k in ["hola","buenas"]):
+        if paciente["estado"] is None and any(k in lower for k in ["hola","buenas"]):
             paciente["estado"] = "menu"
             save_paciente(from_number, paciente)
             return (
@@ -205,7 +206,7 @@ def procesar_mensaje_alia(from_number: str, tipo: str, contenido: str) -> str:
                 "1. Pedir un turno\n2. Solicitar envío de resultados\n3. Contactar con un operador"
             )
 
-        if paciente.get("estado", "") == "menu":
+        if paciente.get("estado") == "menu":
             if texto == "1" or "turno" in lower:
                 paciente["estado"] = "menu_turno"
                 save_paciente(from_number, paciente)
@@ -219,7 +220,7 @@ def procesar_mensaje_alia(from_number: str, tipo: str, contenido: str) -> str:
                 return "Te derivo a un operador. En breve te contactarán."
             return "Opción no válida. Elige 1, 2 o 3."
 
-        if paciente.get("estado", "").startswith("menu_turno"):
+        if paciente.get("estado") == "menu_turno":
             if texto == "1" or "sede" in lower:
                 paciente["tipo_atencion"] = "SEDE"
             elif texto == "2" or "domicilio" in lower:
@@ -254,7 +255,7 @@ def procesar_mensaje_alia(from_number: str, tipo: str, contenido: str) -> str:
             campo = paciente["estado"].split("_",1)[1]
             paciente[campo] = texto.title() if campo in ["nombre","localidad"] else texto
             siguiente = siguiente_campo_faltante(paciente)
-            save_paciente(to_number=from_number, info=paciente)
+            save_paciente(from_number, paciente)
             if siguiente:
                 return siguiente
             paciente["estado"] = "esperando_orden"
@@ -263,12 +264,15 @@ def procesar_mensaje_alia(from_number: str, tipo: str, contenido: str) -> str:
 
         # Fallback GPT
         prompt = (
-            f"Paciente: {paciente.get('nombre','')} (Edad {calcular_edad(paciente.get('fecha_nacimiento','')) or 'desconocida'})\n"
+            f"Paciente: {paciente.get('nombre','')} "
+            f"(Edad {calcular_edad(paciente.get('fecha_nacimiento','')) or 'desconocida'})\n"
             f"Pregunta: {texto}\nResponde sólo si debe realizar ayuno o recolectar orina."
         )
         try:
-            res = openai.ChatCompletion.create(model="gpt-4",
-                                               messages=[{"role":"user","content":prompt}])
+            res = openai.ChatCompletion.create(
+                model="gpt-4",
+                messages=[{"role":"user","content":prompt}]
+            )
             return res.choices[0].message.content.strip()
         except:
             return "No entendí tu consulta, ¿podrías reformularla?"
@@ -276,9 +280,11 @@ def procesar_mensaje_alia(from_number: str, tipo: str, contenido: str) -> str:
     # 4) Procesamiento de imagen (OCR + GPT)
     if tipo == "image":
         try:
-            ocr_resp = requests.post(OCR_SERVICE_URL,
-                                     json={'image_base64': contenido},
-                                     timeout=10)
+            ocr_resp = requests.post(
+                OCR_SERVICE_URL,
+                json={'image_base64': contenido},
+                timeout=10
+            )
             ocr_resp.raise_for_status()
             texto_ocr = ocr_resp.json().get("text","").strip()
             if not texto_ocr:
@@ -291,9 +297,11 @@ def procesar_mensaje_alia(from_number: str, tipo: str, contenido: str) -> str:
             "estudios, cobertura, afiliado.\n\n" + texto_ocr
         )
         try:
-            gpt = openai.ChatCompletion.create(model="gpt-4",
-                                               messages=[{"role":"user","content":prompt}],
-                                               temperature=0.0)
+            gpt = openai.ChatCompletion.create(
+                model="gpt-4",
+                messages=[{"role":"user","content":prompt}],
+                temperature=0.0
+            )
             datos = json.loads(gpt.choices[0].message.content.strip())
         except:
             return "Error interpretando tu orden médica."
@@ -308,10 +316,7 @@ def procesar_mensaje_alia(from_number: str, tipo: str, contenido: str) -> str:
 
         siguiente = siguiente_campo_faltante(paciente)
         if siguiente:
-            return (
-                f"Detectamos:\n{json.dumps(datos, ensure_ascii=False)}\n\n"
-                f"{siguiente}"
-            )
+            return f"Detectamos:\n{json.dumps(datos, ensure_ascii=False)}\n\n{siguiente}"
 
         sede, dir_sede = determinar_sede(paciente["localidad"])
         if paciente["tipo_atencion"] == "SEDE":
@@ -333,7 +338,7 @@ def procesar_mensaje_alia(from_number: str, tipo: str, contenido: str) -> str:
 # -------------------------------------------------------------------------------
 # Webhook WhatsApp (verificación y eventos)
 # -------------------------------------------------------------------------------
-@app.route("/webhook", methods=["GET","POST"])
+@app.route("/webhook", methods=["GET", "POST"])
 def webhook_whatsapp():
     if request.method == "GET":
         mode      = request.args.get("hub.mode")
@@ -359,8 +364,11 @@ def webhook_whatsapp():
 
     elif tipo == "image":
         mid  = msg["image"]["id"]
-        meta = requests.get(f"https://graph.facebook.com/v16.0/{mid}",
-                            params={"access_token": META_ACCESS_TOKEN}, timeout=5).json()
+        meta = requests.get(
+            f"https://graph.facebook.com/v16.0/{mid}",
+            params={"access_token": META_ACCESS_TOKEN},
+            timeout=5
+        ).json()
         url  = meta.get("url")
         img  = requests.get(url, timeout=10).content
         b64  = base64.b64encode(img).decode()
