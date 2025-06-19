@@ -2,30 +2,39 @@
   // 1) Inyectar CSS de tu chat
   const css = document.createElement('link');
   css.rel = 'stylesheet';
-  css.href = '/static/chat.css';    // <-- asegúrate de que exista este archivo
+  css.href = '/static/chat.css';
   document.head.appendChild(css);
 
-  // 2) Launcher flotante
+  // 2) Launcher flotante que ahora contiene tu logo
   const launcher = document.createElement('div');
   launcher.id = 'alia-launcher';
   Object.assign(launcher.style, {
-    position:      'fixed',
-    bottom:        '20px',
-    right:         '20px',
-    width:         '60px',
-    height:        '60px',
-    background:    '#4CAF50',
-    borderRadius:  '50%',
-    cursor:        'pointer',
-    zIndex:        99999,
-    display:       'flex',
-    alignItems:    'center',
-    justifyContent:'center',
-    color:         '#fff',
-    fontSize:      '28px',
-    userSelect:    'none'
+    position:       'fixed',
+    bottom:         '20px',
+    right:          '20px',
+    width:          '60px',
+    height:         '60px',
+    background:     '#fff',           // fondo blanco para el contorno
+    borderRadius:   '50%',
+    cursor:         'pointer',
+    zIndex:         99999,
+    display:        'flex',
+    alignItems:     'center',
+    justifyContent: 'center',
+    boxShadow:      '0 2px 8px rgba(0,0,0,0.2)',
+    overflow:       'hidden'
   });
-  launcher.textContent = '🤖';
+
+  // 2a) imagen del logo
+  const icon = document.createElement('img');
+  icon.src = '/static/alia-icon.png';   // <-- tu logo
+  icon.alt = 'ALIA';
+  Object.assign(icon.style, {
+    width:  '80%',
+    height: '80%',
+    objectFit: 'contain'
+  });
+  launcher.appendChild(icon);
   document.body.appendChild(launcher);
 
   // 3) Contenedor del chat (oculto inicialmente)
@@ -45,9 +54,8 @@
     overflow:      'hidden'
   });
 
-  // 3a) Crear el iframe que cargará tu chat.html
+  // 3a) iframe con tu chat
   const iframe = document.createElement('iframe');
-  // Generar o recuperar sessionId
   const session = localStorage.getItem('ALIA_sessionId') || (() => {
     const s = crypto.randomUUID();
     localStorage.setItem('ALIA_sessionId', s);
@@ -58,7 +66,7 @@
   chatContainer.appendChild(iframe);
   document.body.appendChild(chatContainer);
 
-  // 4) Toggle on/off al clicar en el launcher
+  // 4) Toggle on/off al click en el launcher
   launcher.addEventListener('click', () => {
     chatContainer.style.display =
       chatContainer.style.display === 'none' ? 'block' : 'none';
