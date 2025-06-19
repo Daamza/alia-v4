@@ -3,9 +3,8 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Laboratorio Canala – Ayuda AI</title>
+  <title>Asistente ALIA</title>
   <style>
-    /* Colores y tipografía */
     :root {
       --color-primario: #c62828;
       --color-secundario: #f5f5f5;
@@ -22,13 +21,9 @@
       font-family: var(--fuente-base);
       background: var(--color-secundario);
       color: var(--texto-principal);
-      display: flex;
-      flex-direction: column;
-      height: 100vh;
     }
     a { color: var(--color-primario); text-decoration: none; }
 
-    /* Header lab */
     .header {
       background: var(--blanco);
       padding: 10px 16px;
@@ -36,30 +31,14 @@
       align-items: center;
       justify-content: space-between;
       border-bottom: 1px solid var(--gris-claro);
-      flex: 0 0 auto;
     }
-    .header .logo {
-      display: flex;
-      align-items: center;
-    }
-    .header .logo img {
-      height: 40px;
-      margin-right: 12px;
-    }
-    .header .logo h1 {
+    .header h1 {
       font-size: 1.2rem;
       color: var(--texto-oscuro);
     }
-    .header .menu-toggle {
-      font-size: 1.5rem;
-      cursor: pointer;
-      color: var(--texto-oscuro);
-    }
 
-    /* Instrucciones */
     .instructions {
       padding: 24px 16px;
-      flex: 0 0 auto;
     }
     .instructions h2 {
       text-align: center;
@@ -92,23 +71,43 @@
       line-height: 1.4;
     }
 
-    /* Chat widget */
+    .chat-float-btn {
+      position: fixed;
+      bottom: 20px;
+      right: 20px;
+      background: var(--color-primario);
+      color: var(--blanco);
+      border: none;
+      border-radius: 50%;
+      width: 60px;
+      height: 60px;
+      font-size: 1.5rem;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+      cursor: pointer;
+      z-index: 1000;
+    }
+
     .chat-wrapper {
-      position: relative;
-      flex: 1 1 auto;
-      display: flex;
-      flex-direction: column;
+      position: fixed;
+      bottom: 90px;
+      right: 20px;
+      width: 320px;
+      height: 420px;
       background: var(--gris-claro);
+      display: none;
+      flex-direction: column;
+      border-radius: var(--radio);
+      box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+      overflow: hidden;
+      z-index: 999;
     }
     #chat {
-      flex: 1 1 auto;
+      flex: 1;
       overflow-y: auto;
       padding: 12px;
       scroll-behavior: smooth;
     }
-    #chat::-webkit-scrollbar {
-      width: 6px;
-    }
+    #chat::-webkit-scrollbar { width: 6px; }
     #chat::-webkit-scrollbar-thumb {
       background: rgba(0,0,0,0.2);
       border-radius: 3px;
@@ -125,9 +124,7 @@
     .user { background: #dcf8c6;         align-self: flex-end;   }
 
     .input-container {
-      flex: 0 0 auto;
       display: flex;
-      align-items: center;
       padding: 8px;
       background: var(--blanco);
       border-top: 1px solid var(--gris-claro);
@@ -165,33 +162,29 @@
 </head>
 
 <body>
-  <!-- Header -->
   <header class="header">
-    <div class="logo">
-      <!-- Pon aquí tu logo real -->
-      <img src="logo.svg" alt="Laboratorio Canala">
-      <h1>Laboratorio Canala</h1>
-    </div>
-    <div class="menu-toggle">☰</div>
+    <h1>Indicaciones para Análisis</h1>
   </header>
 
-  <!-- Bloque de instrucciones -->
   <section class="instructions">
     <h2>Instrucciones generales para análisis clínicos</h2>
     <div class="instr-list">
       <div class="instr-card">
         <div class="icon">🕛</div>
-        <p>Ayuno de 12 hs para pacientes que tienen estudios de colesterol, HDL, LDL, triglicéridos, hepatograma y lípidos en general.</p>
+        <p>Ayuno de 12 hs para estudios de colesterol, HDL, LDL, triglicéridos, hepatograma y lípidos.</p>
       </div>
       <div class="instr-card">
         <div class="icon">🕗</div>
-        <p>Ayuno de 8 hs para pacientes sin estudios de colesterol, HDL, LDL, triglicéridos, hepatograma y lípidos en general.</p>
+        <p>Ayuno de 8 hs para pacientes sin estudios relacionados con lípidos.</p>
       </div>
     </div>
   </section>
 
-  <!-- Chat -->
-  <div class="chat-wrapper">
+  <!-- Botón flotante -->
+  <button class="chat-float-btn" onclick="toggleChat()">💬</button>
+
+  <!-- Chat flotante -->
+  <div class="chat-wrapper" id="chatBox">
     <div id="chat"></div>
     <div class="input-container">
       <input id="message" type="text" placeholder="Escribe tu mensaje..." autocomplete="off"/>
@@ -204,11 +197,15 @@
   </div>
 
   <script>
-    // Genera/recupera sessionId
     let sessionId = localStorage.getItem("ALIA_sessionId");
     if (!sessionId) {
       sessionId = crypto.randomUUID();
       localStorage.setItem("ALIA_sessionId", sessionId);
+    }
+
+    function toggleChat() {
+      const box = document.getElementById("chatBox");
+      box.style.display = box.style.display === "flex" ? "none" : "flex";
     }
 
     const chat = document.getElementById("chat");
@@ -248,7 +245,6 @@
       }
     });
 
-    // envío de imagen
     const fileInput = document.getElementById("fileInput");
     document.getElementById("sendImage").addEventListener("click", () => {
       fileInput.click();
