@@ -19,7 +19,7 @@ META_ACCESS_TOKEN     = os.getenv("META_ACCESS_TOKEN")
 META_PHONE_NUMBER_ID  = os.getenv("META_PHONE_NUMBER_ID")
 OPENAI_API_KEY        = os.getenv("OPENAI_API_KEY")
 REDIS_URL             = os.getenv("REDIS_URL")
-GOOGLE_CREDS_B64      = os.getenv("GOOGLE_CREDENTIALS_BASE64")
+GOOGLE_CREDS_B64      = os.getenv("GOOGLE_CREDS_BASE64")
 OCR_SERVICE_URL       = os.getenv("OCR_SERVICE_URL", "https://ocr-microsistema.onrender.com/ocr")
 DERIVADOR_SERVICE_URL = os.getenv("DERIVADOR_SERVICE_URL", "https://derivador-service-onrender.com/derivar")
 
@@ -166,7 +166,6 @@ def procesar_mensaje_alia(from_number: str, tipo: str, contenido: str) -> str:
     if estado == "esperando_estudios_confirmacion" and tipo == "text":
         txt = contenido.strip().lower()
         if txt in ("sí", "si", "s"):
-            # Generar indicaciones con GPT
             estudios_list = paciente["estudios"]
             prompt = (
                 f"Estos son los estudios solicitados: {', '.join(estudios_list)}.\n"
@@ -181,7 +180,6 @@ def procesar_mensaje_alia(from_number: str, tipo: str, contenido: str) -> str:
             except:
                 instrucciones = "No pude obtener indicaciones específicas. Por favor, consulta al laboratorio."
 
-            # luego el mensaje final de pre‐ingreso
             if paciente.get("tipo_atencion") == "SEDE":
                 sede, dir_sede = determinar_sede(paciente["localidad"])
                 final = (
@@ -208,6 +206,23 @@ def procesar_mensaje_alia(from_number: str, tipo: str, contenido: str) -> str:
         texto = contenido.strip()
         lower = texto.lower()
 
+        # — Derivar a operador si pide “asistente”, “ayuda” u “operador” —
+        if paciente["estado"] is None and any(k in lower for k in ["asistente","ayuda","operador"]):
+            payload = {
+                'nombre':            paciente.get('nombre','No disponible'),
+                'direccion':         paciente.get('direccion','No disponible'),
+                'localidad':         paciente.get('localidad','No disponible'),
+                'fecha_nacimiento':  paciente.get('fecha_nacimiento','No disponible'),
+                'cobertura':         paciente.get('cobertura','No disponible'),
+                'afiliado':          paciente.get('afiliado','No disponible'),
+                'telefono_paciente': from_number,
+                'tipo_atencion':     paciente.get('tipo_atencion','No disponible'),
+                'imagen_base64':     paciente.get('imagen_base64','')
+            }
+            derivar_a_operador(payload)
+            clear_paciente(from_number)
+            return "Te derivo a un operador. En breve te contactarán."
+
         if "reiniciar" in lower:
             clear_paciente(from_number)
             return "Flujo reiniciado. ¿En qué puedo ayudarte hoy?"
@@ -231,7 +246,7 @@ def procesar_mensaje_alia(from_number: str, tipo: str, contenido: str) -> str:
                 paciente["estado"] = "esperando_resultados_nombre"
                 save_paciente(from_number, paciente)
                 return "Para enviarte resultados, indícanos tu nombre completo:"
-            if texto == "3" or any(k in lower for k in ["operador","ayuda","asistente"]):
+            if texto == "3":
                 clear_paciente(from_number)
                 return "Te derivo a un operador. En breve te contactarán."
             return "Opción no válida. Elige 1, 2 o 3."
@@ -247,7 +262,6 @@ def procesar_mensaje_alia(from_number: str, tipo: str, contenido: str) -> str:
             save_paciente(from_number, paciente)
             return pregunta
 
-        # resultados...
         if estado.startswith("esperando_resultados_"):
             campo = estado.split("_",1)[1]
             if campo == "nombre":
@@ -268,7 +282,6 @@ def procesar_mensaje_alia(from_number: str, tipo: str, contenido: str) -> str:
                     f"({paciente['dni']}) en {paciente['localidad']}."
                 )
 
-        # datos secuenciales para turno
         if estado.startswith("esperando_") and not estado.startswith("esperando_resultados_"):
             campo = estado.split("_",1)[1]
             paciente[campo] = texto.title() if campo in ["nombre","localidad"] else texto
@@ -280,11 +293,16 @@ def procesar_mensaje_alia(from_number: str, tipo: str, contenido: str) -> str:
             save_paciente(from_number, paciente)
             return "Envía foto de tu orden médica o responde 'no' para continuar sin orden."
 
-        # fallback GPT
+        # — Fallback GPT —
+        edad = calcular_edad(paciente.get("fecha_nacimiento","")) or "desconocida"
         prompt = (
-            f"Paciente: {paciente.get('nombre','')} "
-            f"(Edad {calcular_edad(paciente.get('fecha_nacimiento','')) or 'desconocida'})\n"
-            f"Pregunta: {texto}\nResponde sólo si debe realizar ayuno o recolectar orina."
+            f"Eres ALIA, asistente de laboratorio clínico.\n"
+            f"Paciente: {paciente.get('nombre','')} (Edad: {edad}).\n"
+            f"Pregunta: {texto}\n\n"
+            "Responde de forma clara y concisa:\n"
+            "- Si corresponde, indica horas de ayuno o "
+            "procedimiento de recolección de orina.\n"
+            "- Si la consulta no es de esos temas, ofrece una breve explicación o deriva al operador."
         )
         try:
             resp = openai.ChatCompletion.create(
@@ -383,8 +401,8 @@ def webhook_whatsapp():
     return Response("OK", status=200)
 
 # -------------------------------------------------------------------------------
+
 # Widget & página de ejemplo
-# -------------------------------------------------------------------------------
 @app.route("/widget.js")
 def serve_widget():
     return send_from_directory(app.static_folder, "widget.js")
