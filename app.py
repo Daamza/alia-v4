@@ -166,9 +166,9 @@ def procesar_mensaje_alia(from_number: str, tipo: str, contenido: str) -> str:
         txt = contenido.strip().lower()
         if txt in ("sí", "si", "s"):
             estudios_list = paciente["estudios"]
-            prompt = (
-                f"Estos son los estudios solicitados: {', '.join(estudios_list)}.\n"
-                "Eres un asistente de laboratorio especializado en indicar ayuno y recolección de orina. Te daré una lista de nombres de estudios (pueden ser perfiles, marcadores aislados, análisis de orina, etc.). Tu tarea:
+            prompt = f"""
+Estos son los estudios solicitados: {', '.join(estudios_list)}.
+Eres un asistente de laboratorio especializado en indicar ayuno y recolección de orina. Te daré una lista de nombres de estudios (pueden ser perfiles, marcadores aislados, análisis de orina, etc.). Tu tarea:
 
 1. **Ayuno para estudios de sangre**  
    - Por defecto “Ayuno de 8 horas”.  
@@ -176,30 +176,30 @@ def procesar_mensaje_alia(from_number: str, tipo: str, contenido: str) -> str:
    - **Excepción**: para “Pirens” (y cualquier estudio similar en orina de 24 h con componente sanguíneo), se aplica **“Ayuno de 8 horas”**.
 
 2. **Recolección para estudios de orina**  
-   - Si hay análisis de **microalbuminuria** **SIN** mención de “espontánea” ni “primera orina”, o cualquier “clearance” o “depuración” renal (p. ej. “clearance de creatinina”), o “Pirens”, o “recolección de orina de 24 horas”:  
+   - Si hay análisis de **microalbuminuria** **sin** mención de “espontánea” ni “primera orina”, o cualquier “clearance” o “depuración” renal (p. ej. “clearance de creatinina”), o “Pirens”, o “recolección de orina de 24 horas”:  
      → **“Recolectar orina de 24 horas”**.  
    - Si hay “microalbuminuria en orina espontánea” o “primera orina de la mañana” o “orina matutina”, o “sedimento urinario” o las siglas **O-C**:  
      → **“Recolectar primera orina de la mañana”**.
 
 3. **Salida final**  
-   Al terminar el análisis, **entrega solo dos líneas**:
+   Al terminar el análisis, **entrega solo dos líneas**:  
    1. **Ayuno de sangre**:  
       - Si hay estudios de sangre, indica “Ayuno de X horas” (8 o 12).  
-      - Si **no** hay estudios de sangre, indica “No requiere ayuno”.
+      - Si **no** hay estudios de sangre, indica “No requiere ayuno”.  
    2. **Recolección de orina**:  
-      - Si hay estudios de orina, indica “Recolectar Y” donde Y es:
-        - “primera orina de la mañana” y/o “orina de 24 horas” (si aplican ambas, sepáralas con “ y ”).  
-      - Si **no** hay estudios de orina, indica “No requiere recolección de orina".
-            )
+      - Si hay estudios de orina, indica “Recolectar Y” donde Y es “primera orina de la mañana” y/o “orina de 24 horas” (si aplican ambas, sepáralas con “ y ”).  
+      - Si **no** hay estudios de orina, indica “No requiere recolección de orina”.
+"""
             try:
                 resp = openai.ChatCompletion.create(
                     model="gpt-4",
-                    messages=[{"role":"user","content":prompt}]
+                    messages=[{"role": "user", "content": prompt}]
                 )
                 instrucciones = resp.choices[0].message.content.strip()
             except:
                 instrucciones = "No pude obtener indicaciones específicas. Por favor, consulta al laboratorio."
 
+            # Mensaje final de pre‐ingreso / turno
             if paciente.get("tipo_atencion") == "SEDE":
                 sede, dir_sede = determinar_sede(paciente["localidad"])
                 final = (
@@ -251,7 +251,6 @@ def procesar_mensaje_alia(from_number: str, tipo: str, contenido: str) -> str:
                 return "Para enviarte resultados, indícanos tu nombre completo:"
             if texto == "3" or any(k in lower for k in ["operador","ayuda","asistente"]):
                 clear_paciente(from_number)
-                # dérivo payload si quieres aquí...
                 return "Te derivo a un operador. En breve te contactarán."
             return "Opción no válida. Elige 1, 2 o 3."
 
@@ -266,9 +265,9 @@ def procesar_mensaje_alia(from_number: str, tipo: str, contenido: str) -> str:
             save_paciente(from_number, paciente)
             return pregunta
 
-        # -- Flujo resultados corregido --
+        # Flujo envío de resultados
         if estado.startswith("esperando_resultados_"):
-            campo = estado[len("esperando_resultados_"):]
+            campo = estado.split("_",1)[1]
             if campo == "nombre":
                 paciente["nombre"] = texto.title()
                 paciente["estado"] = "esperando_resultados_dni"
@@ -299,32 +298,11 @@ def procesar_mensaje_alia(from_number: str, tipo: str, contenido: str) -> str:
             save_paciente(from_number, paciente)
             return "Envía foto de tu orden médica o responde 'no' para continuar sin orden."
 
-        # Fallback GPT
+        # Fallback GPT para preguntas libres
         prompt = (
             f"Paciente: {paciente.get('nombre','')} "
             f"(Edad {calcular_edad(paciente.get('fecha_nacimiento','')) or 'desconocida'})\n"
-            f"Pregunta: {texto}\nEres un asistente de laboratorio especializado en indicar ayuno y recolección de orina. Te daré una lista de nombres de estudios (pueden ser perfiles, marcadores aislados, análisis de orina, etc.). Tu tarea:
-
-1. **Ayuno para estudios de sangre**  
-   - Por defecto “Ayuno de 8 horas”.  
-   - Si alguno forma parte de un perfil **lipídico** (colesterol total, HDL, LDL, triglicéridos…), **hepático** (AST, ALT, fosfatasa alcalina, bilirrubinas…) u **hormonal** (TSH, T4 libre, cortisol, estradiol…), entonces “Ayuno de 12 horas”.  
-   - **Excepción**: para “Pirens” (y cualquier estudio similar en orina de 24 h con componente sanguíneo), se aplica **“Ayuno de 8 horas”**.
-
-2. **Recolección para estudios de orina**  
-   - Si hay análisis de **microalbuminuria** **SIN** mención de “espontánea” ni “primera orina”, o cualquier “clearance” o “depuración” renal (p. ej. “clearance de creatinina”), o “Pirens”, o “recolección de orina de 24 horas”:  
-     → **“Recolectar orina de 24 horas”**.  
-   - Si hay “microalbuminuria en orina espontánea” o “primera orina de la mañana” o “orina matutina”, o “sedimento urinario” o las siglas **O-C**:  
-     → **“Recolectar primera orina de la mañana”**.
-
-3. **Salida final**  
-   Al terminar el análisis, **entrega solo dos líneas**:
-   1. **Ayuno de sangre**:  
-      - Si hay estudios de sangre, indica “Ayuno de X horas” (8 o 12).  
-      - Si **no** hay estudios de sangre, indica “No requiere ayuno”.
-   2. **Recolección de orina**:  
-      - Si hay estudios de orina, indica “Recolectar Y” donde Y es:
-        - “primera orina de la mañana” y/o “orina de 24 horas” (si aplican ambas, sepáralas con “ y ”).  
-      - Si **no** hay estudios de orina, indica “No requiere recolección de orina".
+            f"Pregunta: {texto}\nResponde sólo si debe realizar ayuno o recolectar orina."
         )
         try:
             resp = openai.ChatCompletion.create(
