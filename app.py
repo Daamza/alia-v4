@@ -69,16 +69,17 @@ def calcular_edad(fecha_str):
         return None
 
 def siguiente_campo_faltante(paciente):
+    # quitamos 'estudios' de aquí: se piden solo después de la orden
     orden = [
         ('nombre',           "Por favor indícanos tu nombre completo:"),
         ('direccion',        "Ahora indícanos tu domicilio (calle y altura):"),
         ('localidad',        "¿En qué localidad vivís?"),
         ('fecha_nacimiento', "Por favor indícanos tu fecha de nacimiento (dd/mm/aaaa):"),
         ('cobertura',        "¿Cuál es tu cobertura médica?"),
-        ('afiliado',         "¿Cuál es tu número de afiliado?"),
-        ('estudios',         "Por favor confírmanos los estudios solicitados:")
+        ('afiliado',         "¿Cuál es tu número de afiliado?")
     ]
     for campo, pregunta in orden:
+        # paciente.get puede ser None, usamos "or" para default
         if not paciente.get(campo):
             paciente['estado'] = f'esperando_{campo}'
             return pregunta
@@ -139,20 +140,21 @@ def derivar_a_operador(payload):
 # -------------------------------------------------------------------------------
 def procesar_mensaje_alia(from_number: str, tipo: str, contenido: str) -> str:
     paciente = get_paciente(from_number)
+    estado = paciente.get("estado") or ""
 
     # 1) Flujo esperando orden médica
-    if paciente.get("estado") == "esperando_orden":
+    if estado == "esperando_orden":
         if tipo == "image":
             return procesar_mensaje_alia(from_number, "image", contenido)
         txt = contenido.strip().lower()
         if txt in ("no", "no tengo orden"):
             paciente["estado"] = "esperando_estudios_manual"
             save_paciente(from_number, paciente)
-            return "Ok, continuamos sin orden médica. Por favor, escribí los estudios solicitados:"
+            return "Ok, continuamos sin orden médica. Por favor, escribe los estudios solicitados:"
         return "Por favor envía la foto de tu orden médica o responde 'no' para continuar sin orden."
 
     # 2) Sub-flujo manual de estudios
-    if paciente.get("estado") == "esperando_estudios_manual" and tipo == "text":
+    if estado == "esperando_estudios_manual" and tipo == "text":
         estudios_raw = contenido.strip()
         prompt = (
             "Estos son los estudios solicitados de un paciente:\n"
@@ -173,6 +175,7 @@ def procesar_mensaje_alia(from_number: str, tipo: str, contenido: str) -> str:
         paciente["estudios"] = estudios
         save_paciente(from_number, paciente)
 
+        # ahora sí confirmamos y reservamos
         if paciente.get("tipo_atencion") == "SEDE":
             sede, dir_sede = determinar_sede(paciente["localidad"])
             texto_fin = (
@@ -194,18 +197,23 @@ def procesar_mensaje_alia(from_number: str, tipo: str, contenido: str) -> str:
         texto = contenido.strip()
         lower = texto.lower()
 
+        # reinicio
         if "reiniciar" in lower:
             clear_paciente(from_number)
             return "Flujo reiniciado. ¿En qué puedo ayudarte hoy?"
 
+        # saludo y menú inicial
         if paciente["estado"] is None and any(k in lower for k in ["hola","buenas"]):
             paciente["estado"] = "menu"
             save_paciente(from_number, paciente)
             return (
                 "Hola! Soy ALIA, tu asistente IA de laboratorio. Elige una opción:\n"
-                "1. Pedir un turno\n2. Solicitar envío de resultados\n3. Contactar con un operador"
+                "1. Pedir un turno\n"
+                "2. Solicitar envío de resultados\n"
+                "3. Contactar con un operador"
             )
 
+        # menú principal
         if paciente.get("estado") == "menu":
             if texto == "1" or "turno" in lower:
                 paciente["estado"] = "menu_turno"
@@ -220,6 +228,7 @@ def procesar_mensaje_alia(from_number: str, tipo: str, contenido: str) -> str:
                 return "Te derivo a un operador. En breve te contactarán."
             return "Opción no válida. Elige 1, 2 o 3."
 
+        # submenú turno
         if paciente.get("estado") == "menu_turno":
             if texto == "1" or "sede" in lower:
                 paciente["tipo_atencion"] = "SEDE"
@@ -231,8 +240,9 @@ def procesar_mensaje_alia(from_number: str, tipo: str, contenido: str) -> str:
             save_paciente(from_number, paciente)
             return pregunta
 
-        if paciente.get("estado", "").startswith("esperando_resultados_"):
-            campo = paciente["estado"].split("_",1)[1]
+        # flujo resultados
+        if estado.startswith("esperando_resultados_"):
+            campo = estado.split("_",1)[1]
             if campo == "nombre":
                 paciente["nombre"] = texto.title()
                 paciente["estado"] = "esperando_resultados_dni"
@@ -251,18 +261,20 @@ def procesar_mensaje_alia(from_number: str, tipo: str, contenido: str) -> str:
                     f"({paciente['dni']}) en {paciente['localidad']}."
                 )
 
-        if paciente.get("estado", "").startswith("esperando_"):
-            campo = paciente["estado"].split("_",1)[1]
+        # datos secuenciales (pre-turno)
+        if estado.startswith("esperando_") and not estado.startswith("esperando_resultados_"):
+            campo = estado.split("_",1)[1]
             paciente[campo] = texto.title() if campo in ["nombre","localidad"] else texto
             siguiente = siguiente_campo_faltante(paciente)
             save_paciente(from_number, paciente)
             if siguiente:
                 return siguiente
+            # todos los datos previos recopilados: pedimos orden
             paciente["estado"] = "esperando_orden"
             save_paciente(from_number, paciente)
             return "Envía foto de tu orden médica o responde 'no' para continuar sin orden."
 
-        # Fallback GPT
+        # fallback GPT
         prompt = (
             f"Paciente: {paciente.get('nombre','')} "
             f"(Edad {calcular_edad(paciente.get('fecha_nacimiento','')) or 'desconocida'})\n"
@@ -314,24 +326,37 @@ def procesar_mensaje_alia(from_number: str, tipo: str, contenido: str) -> str:
         })
         save_paciente(from_number, paciente)
 
-        siguiente = siguiente_campo_faltante(paciente)
-        if siguiente:
-            return f"Detectamos:\n{json.dumps(datos, ensure_ascii=False)}\n\n{siguiente}"
+        # ahora pedimos confirmación de estudios
+        estudios_list = paciente["estudios"] or []
+        estudios_str = ", ".join(estudios_list) if isinstance(estudios_list, list) else estudios_list
+        paciente["estado"] = "esperando_estudios_confirmacion"
+        save_paciente(from_number, paciente)
+        return f"Hemos detectado estos estudios: {estudios_str}. ¿Los confirmas? (sí/no)"
 
-        sede, dir_sede = determinar_sede(paciente["localidad"])
-        if paciente["tipo_atencion"] == "SEDE":
-            texto_fin = (
-                f"El pre-ingreso se realizó correctamente. Te esperamos en la sede {sede} "
-                f"({dir_sede}) de 07:40 a 11:00. Las prácticas quedan sujetas a autorización del prestador."
-            )
+    # 5) Confirmación de estudios tras OCR
+    if estado == "esperando_estudios_confirmacion" and tipo == "text":
+        txt = contenido.strip().lower()
+        if txt in ("sí","si","s"):
+            # confirmados, procedemos a cita
+            if paciente.get("tipo_atencion") == "SEDE":
+                sede, dir_sede = determinar_sede(paciente["localidad"])
+                texto_fin = (
+                    f"El pre-ingreso se realizó correctamente. Te esperamos en la sede {sede} "
+                    f"({dir_sede}) de 07:40 a 11:00. Las prácticas quedan sujetas a autorización del prestador."
+                )
+            else:
+                dia = determinar_dia_turno(paciente["localidad"])
+                texto_fin = (
+                    f"Tu turno se reservó para el día {dia}, te visitaremos de 08:00 a 11:00. "
+                    "Las prácticas quedan sujetas a autorización del prestador."
+                )
+            clear_paciente(from_number)
+            return texto_fin
         else:
-            dia = determinar_dia_turno(paciente["localidad"])
-            texto_fin = (
-                f"Tu turno se reservó para el día {dia}, te visitaremos de 08:00 a 11:00. "
-                "Las prácticas quedan sujetas a autorización del prestador."
-            )
-        clear_paciente(from_number)
-        return texto_fin
+            # si no confirma, pedimos reingresar estudios manualmente
+            paciente["estado"] = "esperando_estudios_manual"
+            save_paciente(from_number, paciente)
+            return "Entendido, por favor escribe nuevamente los estudios solicitados:"
 
     return "No pude procesar tu mensaje."
 
@@ -366,8 +391,7 @@ def webhook_whatsapp():
         mid  = msg["image"]["id"]
         meta = requests.get(
             f"https://graph.facebook.com/v16.0/{mid}",
-            params={"access_token": META_ACCESS_TOKEN},
-            timeout=5
+            params={"access_token": META_ACCESS_TOKEN}, timeout=5
         ).json()
         url  = meta.get("url")
         img  = requests.get(url, timeout=10).content
