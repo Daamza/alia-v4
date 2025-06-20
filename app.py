@@ -3,6 +3,7 @@ import json
 import base64
 import requests
 import redis
+import logging
 from datetime import datetime
 from flask import Flask, request, Response, send_from_directory, jsonify
 
@@ -12,6 +13,9 @@ from oauth2client.service_account import ServiceAccountCredentials
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
+
+# --- Configuración de logging ------------------------------------------------
+logging.basicConfig(level=logging.INFO)
 
 # --- Configuración de entorno ------------------------------------------------
 META_VERIFY_TOKEN     = os.getenv("META_VERIFY_TOKEN")
@@ -25,6 +29,10 @@ DERIVADOR_SERVICE_URL = os.getenv("DERIVADOR_SERVICE_URL", "https://derivador-se
 
 # --- Inicialización de clientes ----------------------------------------------
 openai.api_key = OPENAI_API_KEY
+
+# Log de longitud de las credenciales de Google para verificar que se cargan
+logging.info(f"Longitud de GOOGLE_CREDS_B64: {len(GOOGLE_CREDS_B64 or '')}")
+
 r = redis.from_url(REDIS_URL, decode_responses=True)
 app = Flask(__name__, static_folder='static')
 
@@ -138,20 +146,14 @@ def derivar_a_operador(payload):
 # -------------------------------------------------------------------------------
 def procesar_mensaje_alia(from_number: str, tipo: str, contenido: str) -> str:
     paciente = get_paciente(from_number)
-    estado   = paciente.get("estado") or ""
-    lower_txt = contenido.strip().lower()
-
-    # --- DERIVACIÓN FORZADA si el usuario pide "asistente" en cualquier momento ---
-    if tipo == "text" and "asistente" in lower_txt:
-        clear_paciente(from_number)
-        derivar_a_operador({"from": from_number})
-        return "Te derivo a un operador. En breve te contactarán."
+    estado = paciente.get("estado") or ""
 
     # 1) Flujo esperando orden médica
     if estado == "esperando_orden":
         if tipo == "image":
             return procesar_mensaje_alia(from_number, "image", contenido)
-        if lower_txt in ("no", "no tengo orden"):
+        txt = contenido.strip().lower()
+        if txt in ("no", "no tengo orden"):
             paciente["estado"] = "esperando_estudios_manual"
             save_paciente(from_number, paciente)
             return "Ok, continuamos sin orden médica.\nPor favor, escribe los estudios solicitados:"
@@ -163,12 +165,14 @@ def procesar_mensaje_alia(from_number: str, tipo: str, contenido: str) -> str:
         paciente["estudios"] = [e.strip() for e in estudios_raw.split(",")]
         paciente["estado"] = "esperando_estudios_confirmacion"
         save_paciente(from_number, paciente)
+
         estudios_str = ", ".join(paciente["estudios"])
         return f"Hemos recibido estos estudios: {estudios_str}.\n¿Los confirmas? (sí/no)"
 
     # 3) Confirmación de estudios manuales
     if estado == "esperando_estudios_confirmacion" and tipo == "text":
-        if lower_txt in ("sí", "si", "s"):
+        txt = contenido.strip().lower()
+        if txt in ("sí", "si", "s"):
             estudios_list = paciente["estudios"]
             prompt = f"""
 Estos son los estudios solicitados: {', '.join(estudios_list)}.
@@ -197,12 +201,13 @@ Eres un asistente de laboratorio especializado en indicar ayuno y recolección d
             try:
                 resp = openai.ChatCompletion.create(
                     model="gpt-4",
-                    messages=[{"role":"user","content":prompt}]
+                    messages=[{"role": "user", "content": prompt}]
                 )
                 instrucciones = resp.choices[0].message.content.strip()
             except:
                 instrucciones = "No pude obtener indicaciones específicas. Por favor, consulta al laboratorio."
-            # Mensaje final de turno/pre-ingreso
+
+            # Mensaje final de pre‐ingreso / turno
             if paciente.get("tipo_atencion") == "SEDE":
                 sede, dir_sede = determinar_sede(paciente["localidad"])
                 final = (
@@ -216,6 +221,7 @@ Eres un asistente de laboratorio especializado en indicar ayuno y recolección d
                     f"Tu turno se reservó para el día {dia}, te visitaremos de 08:00 a 11:00.\n"
                     "Las prácticas quedan sujetas a autorización del prestador."
                 )
+
             clear_paciente(from_number)
             return f"{instrucciones}\n\n{final}"
         else:
@@ -232,7 +238,6 @@ Eres un asistente de laboratorio especializado en indicar ayuno y recolección d
             clear_paciente(from_number)
             return "Flujo reiniciado. ¿En qué puedo ayudarte hoy?"
 
-        # Saludo inicial
         if paciente["estado"] is None and any(k in lower for k in ["hola","buenas"]):
             paciente["estado"] = "menu"
             save_paciente(from_number, paciente)
@@ -243,7 +248,6 @@ Eres un asistente de laboratorio especializado en indicar ayuno y recolección d
                 "3. Contactar con un operador"
             )
 
-        # Menú principal
         if estado == "menu":
             if texto == "1" or "turno" in lower:
                 paciente["estado"] = "menu_turno"
@@ -258,7 +262,6 @@ Eres un asistente de laboratorio especializado en indicar ayuno y recolección d
                 return "Te derivo a un operador. En breve te contactarán."
             return "Opción no válida. Elige 1, 2 o 3."
 
-        # Submenú turno
         if estado == "menu_turno":
             if texto == "1" or "sede" in lower:
                 paciente["tipo_atencion"] = "SEDE"
@@ -272,7 +275,7 @@ Eres un asistente de laboratorio especializado en indicar ayuno y recolección d
 
         # Flujo envío de resultados
         if estado.startswith("esperando_resultados_"):
-            campo = estado[len("esperando_resultados_"):]
+            campo = estado.split("_",1)[1]
             if campo == "nombre":
                 paciente["nombre"] = texto.title()
                 paciente["estado"] = "esperando_resultados_dni"
@@ -291,7 +294,7 @@ Eres un asistente de laboratorio especializado en indicar ayuno y recolección d
                     f"({paciente['dni']}) en {paciente['localidad']}."
                 )
 
-        # Datos secuenciales para turno
+        # Flujo datos secuenciales para turno
         if estado.startswith("esperando_") and not estado.startswith("esperando_resultados_"):
             campo = estado.split("_",1)[1]
             paciente[campo] = texto.title() if campo in ["nombre","localidad"] else texto
@@ -310,8 +313,10 @@ Eres un asistente de laboratorio especializado en indicar ayuno y recolección d
             f"Pregunta: {texto}\nResponde sólo si debe realizar ayuno o recolectar orina."
         )
         try:
-            resp = openai.ChatCompletion.create(model="gpt-4",
-                                                messages=[{"role":"user","content":prompt}])
+            resp = openai.ChatCompletion.create(
+                model="gpt-4",
+                messages=[{"role":"user","content":prompt}]
+            )
             return resp.choices[0].message.content.strip()
         except:
             return "No entendí tu consulta, ¿podrías reformularla?"
@@ -319,9 +324,11 @@ Eres un asistente de laboratorio especializado en indicar ayuno y recolección d
     # 5) Procesamiento de imagen (OCR + GPT)
     if tipo == "image":
         try:
-            ocr_resp = requests.post(OCR_SERVICE_URL,
-                                     json={'image_base64': contenido},
-                                     timeout=10)
+            ocr_resp = requests.post(
+                OCR_SERVICE_URL,
+                json={'image_base64': contenido},
+                timeout=10
+            )
             ocr_resp.raise_for_status()
             texto_ocr = ocr_resp.json().get("text","").strip()
             if not texto_ocr:
@@ -334,9 +341,11 @@ Eres un asistente de laboratorio especializado en indicar ayuno y recolección d
             "estudios, cobertura, afiliado.\n\n" + texto_ocr
         )
         try:
-            gpt = openai.ChatCompletion.create(model="gpt-4",
-                                               messages=[{"role":"user","content":prompt}],
-                                               temperature=0.0)
+            gpt = openai.ChatCompletion.create(
+                model="gpt-4",
+                messages=[{"role":"user","content":prompt}],
+                temperature=0.0
+            )
             datos = json.loads(gpt.choices[0].message.content.strip())
         except:
             return "Error interpretando tu orden médica."
@@ -350,7 +359,7 @@ Eres un asistente de laboratorio especializado en indicar ayuno y recolección d
         save_paciente(from_number, paciente)
 
         estudios_list = paciente["estudios"] or []
-        estudios_str  = ", ".join(estudios_list) if isinstance(estudios_list, list) else estudios_list
+        estudios_str = ", ".join(estudios_list) if isinstance(estudios_list, list) else estudios_list
         paciente["estado"] = "esperando_estudios_confirmacion"
         save_paciente(from_number, paciente)
         return f"Hemos detectado estos estudios: {estudios_str}.\n¿Los confirmas? (sí/no)"
@@ -386,8 +395,10 @@ def webhook_whatsapp():
 
     elif tipo == "image":
         mid  = msg["image"]["id"]
-        meta = requests.get(f"https://graph.facebook.com/v16.0/{mid}",
-                            params={"access_token": META_ACCESS_TOKEN}, timeout=5).json()
+        meta = requests.get(
+            f"https://graph.facebook.com/v16.0/{mid}",
+            params={"access_token": META_ACCESS_TOKEN}, timeout=5
+        ).json()
         url  = meta.get("url")
         img  = requests.get(url, timeout=10).content
         b64  = base64.b64encode(img).decode()
