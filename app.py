@@ -14,9 +14,6 @@ from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 
-# --- Configuración de logging ------------------------------------------------
-logging.basicConfig(level=logging.INFO)
-
 # --- Configuración de entorno ------------------------------------------------
 META_VERIFY_TOKEN     = os.getenv("META_VERIFY_TOKEN")
 META_ACCESS_TOKEN     = os.getenv("META_ACCESS_TOKEN")
@@ -25,14 +22,14 @@ OPENAI_API_KEY        = os.getenv("OPENAI_API_KEY")
 REDIS_URL             = os.getenv("REDIS_URL")
 GOOGLE_CREDS_B64      = os.getenv("GOOGLE_CREDS_B64")
 OCR_SERVICE_URL       = os.getenv("OCR_SERVICE_URL", "https://ocr-microsistema.onrender.com/ocr")
-DERIVADOR_SERVICE_URL = os.getenv("DERIVADOR_SERVICE_URL", "https://derivador-service-onrender.com/derivar")
+DERIVADOR_SERVICE_URL = os.getenv("DERIVADOR_SERVICE_URL", "https://derivador-service.onrender.com/derivar")
+
+# --- Inicialización de logging ----------------------------------------------
+logging.basicConfig(level=logging.INFO)
+logging.info(f"Longitud de GOOGLE_CREDS_B64: {len(GOOGLE_CREDS_B64 or '')}")
 
 # --- Inicialización de clientes ----------------------------------------------
 openai.api_key = OPENAI_API_KEY
-
-# Log de longitud de las credenciales de Google para verificar que se cargan
-logging.info(f"Longitud de GOOGLE_CREDS_B64: {len(GOOGLE_CREDS_B64 or '')}")
-
 r = redis.from_url(REDIS_URL, decode_responses=True)
 app = Flask(__name__, static_folder='static')
 
