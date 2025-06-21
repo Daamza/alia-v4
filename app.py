@@ -22,7 +22,7 @@ OPENAI_API_KEY        = os.getenv("OPENAI_API_KEY")
 REDIS_URL             = os.getenv("REDIS_URL")
 GOOGLE_CREDS_B64      = os.getenv("GOOGLE_CREDS_B64")
 OCR_SERVICE_URL       = os.getenv("OCR_SERVICE_URL", "https://ocr-microsistema.onrender.com/ocr")
-DERIVADOR_SERVICE_URL = os.getenv("DERIVADOR_SERVICE_URL", "https://derivador-service.onrender.com/derivar")
+DERIVADOR_SERVICE_URL = os.getenv("DERIVADOR_SERVICE_URL", "https://derivador-service-onrender.com/derivar")
 
 # --- Inicialización de logging ----------------------------------------------
 logging.basicConfig(level=logging.INFO)
@@ -256,7 +256,8 @@ Eres un asistente de laboratorio especializado en indicar ayuno y recolección d
                 return "Para enviarte resultados, indícanos tu nombre completo:"
             if texto == "3" or any(k in lower for k in ["operador","ayuda","asistente"]):
                 clear_paciente(from_number)
-                return "Te derivo a un operador. En breve te contactarán."
+                return "Te derivo a un operador. En breve te
+contactarán."
             return "Opción no válida. Elige 1, 2 o 3."
 
         if estado == "menu_turno":
