@@ -4,7 +4,7 @@ import base64
 import logging
 import requests
 import redis
-from datetime import datetime
+from datetime import datetime, timedelta
 from enum import Enum
 from flask import Flask, request, Response, send_from_directory, jsonify
 from openai import OpenAI
@@ -13,6 +13,8 @@ from tenacity import retry, stop_after_attempt, wait_fixed
 from PIL import Image
 import io
 import re
+import gspread
+from google.oauth2.service_account import Credentials
 
 # --- Configuración de entorno ------------------------------------------------
 META_VERIFY_TOKEN = os.getenv("META_VERIFY_TOKEN")
@@ -20,8 +22,30 @@ META_ACCESS_TOKEN = os.getenv("META_ACCESS_TOKEN")
 META_PHONE_NUMBER_ID = os.getenv("META_PHONE_NUMBER_ID")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 REDIS_URL = os.getenv("REDIS_URL")
+GOOGLE_CREDS_B64 = os.getenv("GOOGLE_CREDS_B64")
 OCR_SERVICE_URL = os.getenv("OCR_SERVICE_URL", "https://ocr-microsistema.onrender.com/ocr")
 DERIVADOR_SERVICE_URL = os.getenv("DERIVADOR_SERVICE_URL", "https://derivador-service-onrender.com/derivar")
+GOOGLE_SHEET_NAME = os.getenv("GOOGLE_SHEET_NAME", "ALIA_Bot_Data")
+
+# --- Lista de feriados (actualizar según 2025 en Argentina) ------------------
+FERIADOS_2025 = [
+    "2025-01-01",  # Año Nuevo
+    "2025-03-03",  # Carnaval
+    "2025-03-04",  # Carnaval
+    "2025-03-24",  # Día de la Memoria
+    "2025-04-02",  # Día del Veterano
+    "2025-04-17",  # Jueves Santo
+    "2025-04-18",  # Viernes Santo
+    "2025-05-01",  # Día del Trabajador
+    "2025-05-25",  # Revolución de Mayo
+    "2025-06-20",  # Día de la Bandera
+    "2025-07-09",  # Independencia
+    "2025-08-17",  # San Martín
+    "2025-10-12",  # Día de la Diversidad
+    "2025-11-20",  # Soberanía Nacional
+    "2025-12-08",  # Inmaculada Concepción
+    "2025-12-25"   # Navidad
+]
 
 # --- Inicialización de logging ----------------------------------------------
 logging.basicConfig(
@@ -34,6 +58,71 @@ logger = logging.getLogger(__name__)
 openai_client = OpenAI(api_key=OPENAI_API_KEY)
 redis_client = redis.from_url(REDIS_URL, decode_responses=True)
 app = Flask(__name__, static_folder="static")
+
+# --- Inicialización de Google Sheets ----------------------------------------
+def init_google_sheets():
+    """Inicializa el cliente de Google Sheets."""
+    try:
+        creds_json = json.loads(base64.b64decode(GOOGLE_CREDS_B64))
+        scopes = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
+        creds = Credentials.from_service_account_info(creds_json, scopes=scopes)
+        client = gspread.authorize(creds)
+        return client
+    except Exception as e:
+        logger.error(f"Error inicializando Google Sheets: {str(e)}")
+        raise
+
+sheets_client = init_google_sheets()
+
+# --- Gestión de Google Sheets por mes y día ---------------------------------
+def get_monthly_sheet(date: datetime, sheet_type: str) -> gspread.Spreadsheet:
+    """Accede o crea una hoja mensual para Sedes o Domicilios."""
+    sheet_name = f"{sheet_type}_{date.strftime('%Y-%m')}"
+    try:
+        sheet = sheets_client.open(sheet_name)
+    except gspread.exceptions.SpreadsheetNotFound:
+        sheet = sheets_client.create(sheet_name)
+        sheet.share(None, perm_type="anyone", role="writer")
+        logger.info(f"Hoja mensual creada: {sheet_name}")
+    return sheet
+
+def get_daily_worksheet(date: datetime, sheet_type: str) -> gspread.Worksheet:
+    """Accede o crea una pestaña para un día hábil en la hoja mensual."""
+    sheet = get_monthly_sheet(date, sheet_type)
+    tab_name = date.strftime("%Y-%m-%d")
+    try:
+        worksheet = sheet.worksheet(tab_name)
+    except gspread.exceptions.WorksheetNotFound:
+        worksheet = sheet.add_worksheet(title=tab_name, rows=100, cols=20)
+        headers = [
+            "Timestamp", "Nombre", "DNI", "Localidad", "Dirección",
+            "Fecha de Nacimiento", "Edad", "Cobertura", "Afiliado",
+            "Estudios", "Tipo de Atención"
+        ]
+        if sheet_type == "Sedes":
+            headers.append("Sede")
+        worksheet.append_row(headers)
+        logger.info(f"Pestaña creada: {tab_name} en {sheet.title}")
+    return worksheet
+
+def get_resultados_sheet() -> gspread.Worksheet:
+    """Accede o crea la pestaña de resultados en ALIA_Bot_Data."""
+    try:
+        sheet = sheets_client.open(GOOGLE_SHEET_NAME)
+        try:
+            worksheet = sheet.worksheet("Resultados")
+        except gspread.exceptions.WorksheetNotFound:
+            worksheet = sheet.add_worksheet(title="Resultados", rows=100, cols=20)
+            headers = ["Timestamp", "Nombre", "DNI", "Localidad"]
+            worksheet.append_row(headers)
+        return worksheet
+    except gspread.exceptions.SpreadsheetNotFound:
+        sheet = sheets_client.create(GOOGLE_SHEET_NAME)
+        worksheet = sheet.add_worksheet(title="Resultados", rows=100, cols=20)
+        headers = ["Timestamp", "Nombre", "DNI", "Localidad"]
+        worksheet.append_row(headers)
+        sheet.share(None, perm_type="anyone", role="writer")
+        return worksheet
 
 # --- Estados del bot --------------------------------------------------------
 class BotState(Enum):
@@ -107,6 +196,40 @@ def validate_afiliado(afiliado: str) -> bool:
     """Valida que el número de afiliado sea alfanumérico."""
     return bool(re.match(r"^[a-zA-Z0-9]+$", afiliado))
 
+def is_holiday(date: datetime) -> bool:
+    """Verifica si una fecha es feriado."""
+    return date.strftime("%Y-%m-%d") in FERIADOS_2025
+
+def get_next_business_day(date: datetime, localidad: str) -> tuple:
+    """Obtiene el próximo día hábil según la localidad, excluyendo feriados y domingos."""
+    loc = (localidad or "").lower()
+    target_days = {
+        "ituzaingo": [0],  # Lunes
+        "merlo": [1, 4],   # Martes, Viernes
+        "padua": [1, 4],   # Martes, Viernes
+        "tesei": [2, 5],   # Miércoles, Sábado
+        "hurlingham": [2, 5],  # Miércoles, Sábado
+        "castelar": [3],   # Jueves
+    }.get(loc, [0])  # Default: Lunes
+
+    current_date = date
+    while True:
+        current_date += timedelta(days=1)
+        if current_date.weekday() == 6 or is_holiday(current_date):  # Domingo o feriado
+            continue
+        if current_date.weekday() in target_days:
+            return current_date, current_date.strftime("%A").capitalize()
+
+def count_domicilio_patients(date: datetime) -> int:
+    """Cuenta los pacientes registrados en la pestaña de Domicilios para un día."""
+    try:
+        worksheet = get_daily_worksheet(date, "Domicilios")
+        records = worksheet.get_all_records()
+        return len(records)
+    except Exception as e:
+        logger.error(f"Error contando pacientes en Domicilios {date}: {str(e)}")
+        return 0
+
 def siguiente_campo_faltante(paciente: dict) -> str:
     """Determina el próximo campo faltante y actualiza el estado."""
     campos = [
@@ -123,19 +246,28 @@ def siguiente_campo_faltante(paciente: dict) -> str:
             return pregunta
     return None
 
-def determinar_dia_turno(localidad: str) -> str:
-    """Determina el día de turno según la localidad."""
+def determinar_dia_turno(localidad: str) -> tuple:
+    """Determina el próximo día hábil de turno según la localidad."""
     loc = (localidad or "").lower()
-    wd = datetime.today().weekday()
+    today = datetime.today()
     if "ituzaingo" in loc:
-        return "Lunes"
-    if "merlo" in loc or "padua" in loc:
-        return "Martes" if wd < 4 else "Viernes"
-    if "tesei" in loc or "hurlingham" in loc:
-        return "Miércoles" if wd < 4 else "Sábado"
-    if "castelar" in loc:
-        return "Jueves"
-    return "Lunes"
+        target_days = [0]  # Lunes
+    elif "merlo" in loc or "padua" in loc:
+        target_days = [1, 4]  # Martes, Viernes
+    elif "tesei" in loc or "hurlingham" in loc:
+        target_days = [2, 5]  # Miércoles, Sábado
+    elif "castelar" in loc:
+        target_days = [3]  # Jueves
+    else:
+        target_days = [0]  # Default: Lunes
+
+    current_date = today
+    while True:
+        current_date += timedelta(days=1)
+        if current_date.weekday() == 6 or is_holiday(current_date):  # Domingo o feriado
+            continue
+        if current_date.weekday() in target_days:
+            return current_date, current_date.strftime("%A").capitalize()
 
 def determinar_sede(localidad: str) -> tuple:
     """Determina la sede y dirección según la localidad."""
@@ -147,6 +279,49 @@ def determinar_sede(localidad: str) -> tuple:
     if loc in ["tesei", "hurlingham"]:
         return "TESEI", "Concepción Arenal 2694"
     return "GENERAL", "Nuestra sede principal"
+
+# --- Registro en Google Sheets ----------------------------------------------
+def registrar_turno(paciente: dict, date: datetime, sheet_type: str, sede: str = None):
+    """Registra un turno en la pestaña correspondiente de la hoja mensual."""
+    try:
+        worksheet = get_daily_worksheet(date, sheet_type)
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        estudios_str = ", ".join(paciente["estudios"]) if isinstance(paciente["estudios"], list) else paciente["estudios"]
+        row = [
+            timestamp,
+            paciente.get("nombre", ""),
+            paciente.get("dni", ""),
+            paciente.get("localidad", ""),
+            paciente.get("direccion", ""),
+            paciente.get("fecha_nacimiento", ""),
+            calcular_edad(paciente.get("fecha_nacimiento", "")) or "",
+            paciente.get("cobertura", ""),
+            paciente.get("afiliado", ""),
+            estudios_str,
+            paciente.get("tipo_atencion", "")
+        ]
+        if sheet_type == "Sedes":
+            row.append(sede or "")
+        worksheet.append_row(row)
+        logger.info(f"Turno registrado para {paciente.get('nombre')} en {sheet_type} ({date.strftime('%Y-%m-%d')})")
+    except Exception as e:
+        logger.error(f"Error registrando turno en Google Sheets: {str(e)}")
+
+def registrar_resultado(paciente: dict):
+    """Registra una solicitud de resultado en la hoja de Google Sheets."""
+    try:
+        worksheet = get_resultados_sheet()
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        row = [
+            timestamp,
+            paciente.get("nombre", ""),
+            paciente.get("dni", ""),
+            paciente.get("localidad", "")
+        ]
+        worksheet.append_row(row)
+        logger.info(f"Solicitud de resultado registrada para {paciente.get('nombre')}")
+    except Exception as e:
+        logger.error(f"Error registrando resultado en Google Sheets: {str(e)}")
 
 # --- Envío de WhatsApp (Cloud API) ------------------------------------------
 def enviar_mensaje_whatsapp(to_number: str, body_text: str):
@@ -269,17 +444,23 @@ def handle_estudios_confirmacion(from_number: str, content: str, paciente: dict)
     if txt in ("sí", "si", "s"):
         estudios_list = paciente["estudios"]
         instrucciones = get_instrucciones_estudios(estudios_list)
+        localidad = paciente.get("localidad", "")
         if paciente.get("tipo_atencion") == "SEDE":
-            sede, dir_sede = determinar_sede(paciente["localidad"])
+            sede, dir_sede = determinar_sede(localidad)
+            date, dia = determinar_dia_turno(localidad)
+            registrar_turno(paciente, date, "Sedes", sede)
             final = (
                 f"El pre-ingreso se realizó correctamente.\n"
-                f"Te esperamos en la sede {sede} ({dir_sede}) de 07:40 a 11:00.\n"
+                f"Te esperamos en la sede {sede} ({dir_sede}) el {dia} ({date.strftime('%d/%m/%Y')}) de 07:40 a 11:00.\n"
                 "Las prácticas quedan sujetas a autorización del prestador."
             )
-        else:
-            dia = determinar_dia_turno(paciente["localidad"])
+        else:  # Domicilio
+            date, dia = determinar_dia_turno(localidad)
+            while count_domicilio_patients(date) >= 15:
+                date, dia = get_next_business_day(date, localidad)
+            registrar_turno(paciente, date, "Domicilios")
             final = (
-                f"Tu turno se reservó para el día {dia}, te visitaremos de 08:00 a 11:00.\n"
+                f"Tu turno se reservó para el día {dia} ({date.strftime('%d/%m/%Y')}), te visitaremos de 08:00 a 11:00.\n"
                 "Las prácticas quedan sujetas a autorización del prestador."
             )
         clear_paciente(from_number)
@@ -353,6 +534,7 @@ def handle_resultados(from_number: str, content: str, paciente: dict) -> str:
             f"Solicitamos envío de resultados para {paciente['nombre']} "
             f"({paciente['dni']}) en {paciente['localidad']}."
         )
+        registrar_resultado(paciente)
         clear_paciente(from_number)
         return msg
 
