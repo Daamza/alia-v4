@@ -90,6 +90,118 @@ def get_daily_worksheet(date: datetime, sheet_type: str) -> gspread.Worksheet:
     return worksheet
 
 def get_resultados_sheet() -> gspread.Worksheet:
+import os
+import json
+import base64
+import logging
+import requests
+import redis
+from datetime import datetime, timedelta
+from enum import Enum
+from flask import Flask, request, Response, send_from_directory, jsonify
+import openai
+from requests.exceptions import RequestException
+from tenacity import retry, stop_after_attempt, wait_fixed
+from PIL import Image
+import io
+import re
+import gspread
+from google.oauth2.service_account import Credentials
+from googleapiclient.discovery import build
+
+# --- Configuración de entorno ------------------------------------------------
+META_VERIFY_TOKEN     = os.getenv("META_VERIFY_TOKEN")
+META_ACCESS_TOKEN     = os.getenv("META_ACCESS_TOKEN")
+META_PHONE_NUMBER_ID  = os.getenv("META_PHONE_NUMBER_ID")
+OPENAI_API_KEY        = os.getenv("OPENAI_API_KEY")
+REDIS_URL             = os.getenv("REDIS_URL")
+GOOGLE_CREDS_B64      = os.getenv("GOOGLE_CREDS_B64")
+OCR_SERVICE_URL       = os.getenv("OCR_SERVICE_URL", "https://ocr-microsistema.onrender.com/ocr")
+DERIVADOR_SERVICE_URL = os.getenv("DERIVADOR_SERVICE_URL", "https://derivador-service-onrender.com/derivar")
+GOOGLE_SHEET_NAME     = os.getenv("GOOGLE_SHEET_NAME", "ALIA_Bot_Data")
+ALIA_FOLDER_ID        = "14UsGNIz6MBhQNd0gVFeSe3UPBNyB8yrk"
+
+# --- Lista de feriados (actualizar según 2025 en Argentina) ------------------
+FERIADOS_2025 = [
+    "2025-01-01", "2025-03-03", "2025-03-04", "2025-03-24", "2025-04-02",
+    "2025-04-17", "2025-04-18", "2025-05-01", "2025-05-25", "2025-06-20",
+    "2025-07-09", "2025-08-17", "2025-10-12", "2025-11-20", "2025-12-08", "2025-12-25"
+]
+
+# --- Inicialización de logging -----------------------------------------------
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+logger = logging.getLogger(__name__)
+
+# --- Inicialización de clientes ----------------------------------------------
+openai.api_key    = OPENAI_API_KEY
+redis_client      = redis.from_url(REDIS_URL, decode_responses=True)
+app               = Flask(__name__, static_folder="static")
+
+# --- Inicialización de Google Sheets y Google Drive --------------------------
+def init_google_sheets():
+    try:
+        creds_json = json.loads(base64.b64decode(GOOGLE_CREDS_B64))
+        scopes = [
+            "https://www.googleapis.com/auth/spreadsheets",
+            "https://www.googleapis.com/auth/drive"
+        ]
+        creds = Credentials.from_service_account_info(creds_json, scopes=scopes)
+        client = gspread.authorize(creds)
+        return client, creds
+    except Exception as e:
+        logger.error(f"Error inicializando Google Sheets: {e}")
+        raise
+
+sheets_client, sheets_creds = init_google_sheets()
+
+def mover_a_carpeta(sheet, folder_id, creds):
+    try:
+        drive_service = build("drive", "v3", credentials=creds)
+        file_id = sheet.id
+        file = drive_service.files().get(fileId=file_id, fields='parents').execute()
+        prev_parents = ",".join(file.get('parents', []))
+        drive_service.files().update(
+            fileId=file_id,
+            addParents=folder_id,
+            removeParents=prev_parents,
+            fields='id, parents'
+        ).execute()
+        logger.info(f"Sheet movido a carpeta: {folder_id}")
+    except Exception as e:
+        logger.error(f"Error moviendo el sheet a carpeta: {e}")
+
+# --- Gestión de Google Sheets por mes y día ----------------------------------
+def get_monthly_sheet(date: datetime, sheet_type: str) -> gspread.Spreadsheet:
+    sheet_name = f"{sheet_type}_{date.strftime('%Y-%m')}"
+    folder_id = ALIA_FOLDER_ID
+    try:
+        sheet = sheets_client.open(sheet_name)
+    except gspread.exceptions.SpreadsheetNotFound:
+        sheet = sheets_client.create(sheet_name)
+        sheet.share(None, perm_type="anyone", role="writer")
+        mover_a_carpeta(sheet, folder_id, sheets_creds)
+        logger.info(f"Hoja mensual creada: {sheet_name}")
+    return sheet
+
+def get_daily_worksheet(date: datetime, sheet_type: str) -> gspread.Worksheet:
+    sheet = get_monthly_sheet(date, sheet_type)
+    tab_name = date.strftime("%Y-%m-%d")
+    try:
+        worksheet = sheet.worksheet(tab_name)
+    except gspread.exceptions.WorksheetNotFound:
+        worksheet = sheet.add_worksheet(title=tab_name, rows=100, cols=20)
+        headers = [
+            "Timestamp", "Nombre", "DNI", "Localidad", "Dirección",
+            "Fecha de Nacimiento", "Edad", "Cobertura", "Afiliado",
+            "Estudios", "Tipo de Atención"
+        ]
+        if sheet_type == "Sedes":
+            headers.append("Sede")
+        worksheet.append_row(headers)
+        logger.info(f"Pestaña creada: {tab_name} en {sheet.title}")
+    return worksheet
+
+def get_resultados_sheet() -> gspread.Worksheet:
     try:
         sheet = sheets_client.open(GOOGLE_SHEET_NAME)
         try:
@@ -101,10 +213,11 @@ def get_resultados_sheet() -> gspread.Worksheet:
         return worksheet
     except gspread.exceptions.SpreadsheetNotFound:
         sheet = sheets_client.create(GOOGLE_SHEET_NAME)
+        sheet.share(None, perm_type="anyone", role="writer")
+        mover_a_carpeta(sheet, ALIA_FOLDER_ID, sheets_creds)
         worksheet = sheet.add_worksheet(title="Resultados", rows=100, cols=20)
         headers = ["Timestamp", "Nombre", "DNI", "Localidad"]
         worksheet.append_row(headers)
-        sheet.share(None, perm_type="anyone", role="writer")
         return worksheet
 
 # --- Estados del bot ---------------------------------------------------------
