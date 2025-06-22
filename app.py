@@ -343,10 +343,23 @@ def get_instrucciones_estudios(estudios_list: list) -> str:
     if cached:
         return cached
 
-    prompt = (
-        f"Estos son los estudios solicitados: {', '.join(estudios_list)}.\n"
-        "Eres un asistente de laboratorio especializado en indicar ayuno y recolección de orina...\n"
-    )
+    prompt = (f"""
+Estos son los estudios solicitados: {', '.join(estudios_list)}.
+Eres un asistente de laboratorio especializado en indicar ayuno y recolección de orina. Tu tarea:
+
+1. **Ayuno para estudios de sangre**
+   - Por defecto “Ayuno de 8 horas”.
+   - Si alguno forma parte de un perfil **lipídico**, **hepático** u **hormonal**, entonces “Ayuno de 12 horas”.
+   - Excepción para “Pirens”: “Ayuno de 8 horas”.
+
+2. **Recolección para estudios de orina**
+   - Si hay análisis de **microalbuminuria** sin “espontánea” o cualquier “clearance” renal: “Recolectar orina de 24 horas”.
+   - Si hay “primera orina de la mañana” o “sedimento urinario”: “Recolectar primera orina de la mañana”.
+
+3. **Salida final:**  
+   - Ayuno de sangre: “Ayuno de X horas” o “No requiere ayuno”.  
+   - Recolección de orina: “Recolectar Y” o “No requiere recolección de orina”.
+"""
     try:
         resp = openai.ChatCompletion.create(
             model="gpt-4",
