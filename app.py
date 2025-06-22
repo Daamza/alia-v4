@@ -343,7 +343,7 @@ def get_instrucciones_estudios(estudios_list: list) -> str:
     if cached:
         return cached
 
-    prompt = (f"""
+    prompt = f"""
 Estos son los estudios solicitados: {', '.join(estudios_list)}.
 Eres un asistente de laboratorio especializado en indicar ayuno y recolección de orina. Tu tarea:
 
