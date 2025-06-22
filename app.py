@@ -17,41 +17,25 @@ import gspread
 from google.oauth2.service_account import Credentials
 
 # --- Configuración de entorno ------------------------------------------------
-META_VERIFY_TOKEN = os.getenv("META_VERIFY_TOKEN")
-META_ACCESS_TOKEN = os.getenv("META_ACCESS_TOKEN")
-META_PHONE_NUMBER_ID = os.getenv("META_PHONE_NUMBER_ID")
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-REDIS_URL = os.getenv("REDIS_URL")
-GOOGLE_CREDS_B64 = os.getenv("GOOGLE_CREDS_B64")
-OCR_SERVICE_URL = os.getenv("OCR_SERVICE_URL", "https://ocr-microsistema.onrender.com/ocr")
+META_VERIFY_TOKEN     = os.getenv("META_VERIFY_TOKEN")
+META_ACCESS_TOKEN     = os.getenv("META_ACCESS_TOKEN")
+META_PHONE_NUMBER_ID  = os.getenv("META_PHONE_NUMBER_ID")
+OPENAI_API_KEY        = os.getenv("OPENAI_API_KEY")
+REDIS_URL             = os.getenv("REDIS_URL")
+GOOGLE_CREDS_B64      = os.getenv("GOOGLE_CREDS_B64")
+OCR_SERVICE_URL       = os.getenv("OCR_SERVICE_URL", "https://ocr-microsistema.onrender.com/ocr")
 DERIVADOR_SERVICE_URL = os.getenv("DERIVADOR_SERVICE_URL", "https://derivador-service-onrender.com/derivar")
-GOOGLE_SHEET_NAME = os.getenv("GOOGLE_SHEET_NAME", "ALIA_Bot_Data")
+GOOGLE_SHEET_NAME     = os.getenv("GOOGLE_SHEET_NAME", "ALIA_Bot_Data")
 
 # --- Lista de feriados (actualizar según 2025 en Argentina) ------------------
 FERIADOS_2025 = [
-    "2025-01-01",  # Año Nuevo
-    "2025-03-03",  # Carnaval
-    "2025-03-04",  # Carnaval
-    "2025-03-24",  # Día de la Memoria
-    "2025-04-02",  # Día del Veterano
-    "2025-04-17",  # Jueves Santo
-    "2025-04-18",  # Viernes Santo
-    "2025-05-01",  # Día del Trabajador
-    "2025-05-25",  # Revolución de Mayo
-    "2025-06-20",  # Día de la Bandera
-    "2025-07-09",  # Independencia
-    "2025-08-17",  # San Martín
-    "2025-10-12",  # Día de la Diversidad
-    "2025-11-20",  # Soberanía Nacional
-    "2025-12-08",  # Inmaculada Concepción
-    "2025-12-25"   # Navidad
+    "2025-01-01", "2025-03-03", "2025-03-04", "2025-03-24", "2025-04-02",
+    "2025-04-17", "2025-04-18", "2025-05-01", "2025-05-25", "2025-06-20",
+    "2025-07-09", "2025-08-17", "2025-10-12", "2025-11-20", "2025-12-08", "2025-12-25"
 ]
 
-# --- Inicialización de logging ----------------------------------------------
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(levelname)s - %(message)s"
-)
+# --- Inicialización de logging -----------------------------------------------
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
 # --- Inicialización de clientes ----------------------------------------------
@@ -59,9 +43,8 @@ openai_client = OpenAI(api_key=OPENAI_API_KEY)
 redis_client = redis.from_url(REDIS_URL, decode_responses=True)
 app = Flask(__name__, static_folder="static")
 
-# --- Inicialización de Google Sheets ----------------------------------------
+# --- Inicialización de Google Sheets -----------------------------------------
 def init_google_sheets():
-    """Inicializa el cliente de Google Sheets."""
     try:
         creds_json = json.loads(base64.b64decode(GOOGLE_CREDS_B64))
         scopes = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
@@ -74,9 +57,8 @@ def init_google_sheets():
 
 sheets_client = init_google_sheets()
 
-# --- Gestión de Google Sheets por mes y día ---------------------------------
+# --- Gestión de Google Sheets por mes y día ----------------------------------
 def get_monthly_sheet(date: datetime, sheet_type: str) -> gspread.Spreadsheet:
-    """Accede o crea una hoja mensual para Sedes o Domicilios."""
     sheet_name = f"{sheet_type}_{date.strftime('%Y-%m')}"
     try:
         sheet = sheets_client.open(sheet_name)
@@ -87,7 +69,6 @@ def get_monthly_sheet(date: datetime, sheet_type: str) -> gspread.Spreadsheet:
     return sheet
 
 def get_daily_worksheet(date: datetime, sheet_type: str) -> gspread.Worksheet:
-    """Accede o crea una pestaña para un día hábil en la hoja mensual."""
     sheet = get_monthly_sheet(date, sheet_type)
     tab_name = date.strftime("%Y-%m-%d")
     try:
@@ -106,7 +87,6 @@ def get_daily_worksheet(date: datetime, sheet_type: str) -> gspread.Worksheet:
     return worksheet
 
 def get_resultados_sheet() -> gspread.Worksheet:
-    """Accede o crea la pestaña de resultados en ALIA_Bot_Data."""
     try:
         sheet = sheets_client.open(GOOGLE_SHEET_NAME)
         try:
@@ -124,7 +104,7 @@ def get_resultados_sheet() -> gspread.Worksheet:
         sheet.share(None, perm_type="anyone", role="writer")
         return worksheet
 
-# --- Estados del bot --------------------------------------------------------
+# --- Estados del bot ---------------------------------------------------------
 class BotState(Enum):
     NONE = None
     MENU = "menu"
@@ -142,39 +122,27 @@ class BotState(Enum):
     ESPERANDO_RESULTADOS_DNI = "esperando_resultados_dni"
     ESPERANDO_RESULTADOS_LOCALIDAD = "esperando_resultados_localidad"
 
-# --- Funciones de sesión ----------------------------------------------------
+# --- Funciones de sesión -----------------------------------------------------
 def get_paciente(tel: str) -> dict:
-    """Obtiene los datos del paciente desde Redis o inicializa uno nuevo."""
     data = redis_client.get(f"paciente:{tel}")
     if data:
         return json.loads(data)
     paciente = {
-        "estado": None,
-        "tipo_atencion": None,
-        "nombre": None,
-        "direccion": None,
-        "localidad": None,
-        "fecha_nacimiento": None,
-        "cobertura": None,
-        "afiliado": None,
-        "estudios": None,
-        "imagen_base64": None,
-        "dni": None
+        "estado": None, "tipo_atencion": None, "nombre": None, "direccion": None, "localidad": None,
+        "fecha_nacimiento": None, "cobertura": None, "afiliado": None, "estudios": None,
+        "imagen_base64": None, "dni": None
     }
     save_paciente(tel, paciente)
     return paciente
 
 def save_paciente(tel: str, info: dict):
-    """Guarda los datos del paciente en Redis con TTL de 24 horas."""
     redis_client.set(f"paciente:{tel}", json.dumps(info), ex=86400)
 
 def clear_paciente(tel: str):
-    """Elimina los datos del paciente de Redis."""
     redis_client.delete(f"paciente:{tel}")
 
-# --- Utilidades generales ---------------------------------------------------
+# --- Utilidades generales ----------------------------------------------------
 def calcular_edad(fecha_str: str) -> int:
-    """Calcula la edad a partir de una fecha de nacimiento (dd/mm/aaaa)."""
     try:
         nac = datetime.strptime(fecha_str, "%d/%m/%Y")
         hoy = datetime.today()
@@ -183,7 +151,6 @@ def calcular_edad(fecha_str: str) -> int:
         return None
 
 def validate_fecha_nacimiento(fecha: str) -> bool:
-    """Valida el formato de fecha de nacimiento (dd/mm/aaaa)."""
     if re.match(r"^\d{2}/\d{2}/\d{4}$", fecha):
         try:
             datetime.strptime(fecha, "%d/%m/%Y")
@@ -193,35 +160,26 @@ def validate_fecha_nacimiento(fecha: str) -> bool:
     return False
 
 def validate_afiliado(afiliado: str) -> bool:
-    """Valida que el número de afiliado sea alfanumérico."""
     return bool(re.match(r"^[a-zA-Z0-9]+$", afiliado))
 
 def is_holiday(date: datetime) -> bool:
-    """Verifica si una fecha es feriado."""
     return date.strftime("%Y-%m-%d") in FERIADOS_2025
 
 def get_next_business_day(date: datetime, localidad: str) -> tuple:
-    """Obtiene el próximo día hábil según la localidad, excluyendo feriados y domingos."""
     loc = (localidad or "").lower()
     target_days = {
-        "ituzaingo": [0],  # Lunes
-        "merlo": [1, 4],   # Martes, Viernes
-        "padua": [1, 4],   # Martes, Viernes
-        "tesei": [2, 5],   # Miércoles, Sábado
-        "hurlingham": [2, 5],  # Miércoles, Sábado
-        "castelar": [3],   # Jueves
-    }.get(loc, [0])  # Default: Lunes
-
+        "ituzaingo": [0], "merlo": [1, 4], "padua": [1, 4],
+        "tesei": [2, 5], "hurlingham": [2, 5], "castelar": [3]
+    }.get(loc, [0])
     current_date = date
     while True:
         current_date += timedelta(days=1)
-        if current_date.weekday() == 6 or is_holiday(current_date):  # Domingo o feriado
+        if current_date.weekday() == 6 or is_holiday(current_date):
             continue
         if current_date.weekday() in target_days:
             return current_date, current_date.strftime("%A").capitalize()
 
 def count_domicilio_patients(date: datetime) -> int:
-    """Cuenta los pacientes registrados en la pestaña de Domicilios para un día."""
     try:
         worksheet = get_daily_worksheet(date, "Domicilios")
         records = worksheet.get_all_records()
@@ -231,7 +189,6 @@ def count_domicilio_patients(date: datetime) -> int:
         return 0
 
 def siguiente_campo_faltante(paciente: dict) -> str:
-    """Determina el próximo campo faltante y actualiza el estado."""
     campos = [
         ("nombre", BotState.ESPERANDO_NOMBRE, "Por favor indícanos tu nombre completo:"),
         ("direccion", BotState.ESPERANDO_DIRECCION, "Ahora indícanos tu domicilio (calle y altura):"),
@@ -247,30 +204,27 @@ def siguiente_campo_faltante(paciente: dict) -> str:
     return None
 
 def determinar_dia_turno(localidad: str) -> tuple:
-    """Determina el próximo día hábil de turno según la localidad."""
     loc = (localidad or "").lower()
     today = datetime.today()
     if "ituzaingo" in loc:
-        target_days = [0]  # Lunes
+        target_days = [0]
     elif "merlo" in loc or "padua" in loc:
-        target_days = [1, 4]  # Martes, Viernes
+        target_days = [1, 4]
     elif "tesei" in loc or "hurlingham" in loc:
-        target_days = [2, 5]  # Miércoles, Sábado
+        target_days = [2, 5]
     elif "castelar" in loc:
-        target_days = [3]  # Jueves
+        target_days = [3]
     else:
-        target_days = [0]  # Default: Lunes
-
+        target_days = [0]
     current_date = today
     while True:
         current_date += timedelta(days=1)
-        if current_date.weekday() == 6 or is_holiday(current_date):  # Domingo o feriado
+        if current_date.weekday() == 6 or is_holiday(current_date):
             continue
         if current_date.weekday() in target_days:
             return current_date, current_date.strftime("%A").capitalize()
 
 def determinar_sede(localidad: str) -> tuple:
-    """Determina la sede y dirección según la localidad."""
     loc = (localidad or "").lower()
     if loc in ["castelar", "ituzaingo", "moron"]:
         return "CASTELAR", "Arias 2530"
@@ -280,25 +234,18 @@ def determinar_sede(localidad: str) -> tuple:
         return "TESEI", "Concepción Arenal 2694"
     return "GENERAL", "Nuestra sede principal"
 
-# --- Registro en Google Sheets ----------------------------------------------
+# --- Registro en Google Sheets -----------------------------------------------
 def registrar_turno(paciente: dict, date: datetime, sheet_type: str, sede: str = None):
-    """Registra un turno en la pestaña correspondiente de la hoja mensual."""
     try:
         worksheet = get_daily_worksheet(date, sheet_type)
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         estudios_str = ", ".join(paciente["estudios"]) if isinstance(paciente["estudios"], list) else paciente["estudios"]
         row = [
-            timestamp,
-            paciente.get("nombre", ""),
-            paciente.get("dni", ""),
-            paciente.get("localidad", ""),
-            paciente.get("direccion", ""),
-            paciente.get("fecha_nacimiento", ""),
+            timestamp, paciente.get("nombre", ""), paciente.get("dni", ""), paciente.get("localidad", ""),
+            paciente.get("direccion", ""), paciente.get("fecha_nacimiento", ""),
             calcular_edad(paciente.get("fecha_nacimiento", "")) or "",
-            paciente.get("cobertura", ""),
-            paciente.get("afiliado", ""),
-            estudios_str,
-            paciente.get("tipo_atencion", "")
+            paciente.get("cobertura", ""), paciente.get("afiliado", ""),
+            estudios_str, paciente.get("tipo_atencion", "")
         ]
         if sheet_type == "Sedes":
             row.append(sede or "")
@@ -308,24 +255,19 @@ def registrar_turno(paciente: dict, date: datetime, sheet_type: str, sede: str =
         logger.error(f"Error registrando turno en Google Sheets: {str(e)}")
 
 def registrar_resultado(paciente: dict):
-    """Registra una solicitud de resultado en la hoja de Google Sheets."""
     try:
         worksheet = get_resultados_sheet()
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         row = [
-            timestamp,
-            paciente.get("nombre", ""),
-            paciente.get("dni", ""),
-            paciente.get("localidad", "")
+            timestamp, paciente.get("nombre", ""), paciente.get("dni", ""), paciente.get("localidad", "")
         ]
         worksheet.append_row(row)
         logger.info(f"Solicitud de resultado registrada para {paciente.get('nombre')}")
     except Exception as e:
         logger.error(f"Error registrando resultado en Google Sheets: {str(e)}")
 
-# --- Envío de WhatsApp (Cloud API) ------------------------------------------
+# --- Envío de WhatsApp (Cloud API) -------------------------------------------
 def enviar_mensaje_whatsapp(to_number: str, body_text: str):
-    """Envía un mensaje de WhatsApp al número especificado."""
     url = f"https://graph.facebook.com/v16.0/{META_PHONE_NUMBER_ID}/messages"
     headers = {
         "Authorization": f"Bearer {META_ACCESS_TOKEN}",
@@ -344,10 +286,9 @@ def enviar_mensaje_whatsapp(to_number: str, body_text: str):
     except RequestException as e:
         logger.error(f"Error enviando mensaje a {to_number}: {str(e)}")
 
-# --- Derivación a operador externa ------------------------------------------
+# --- Derivación a operador externa -------------------------------------------
 @retry(stop=stop_after_attempt(3), wait=wait_fixed(2))
 def derivar_a_operador(payload: dict):
-    """Deriva el caso a un operador humano."""
     try:
         resp = requests.post(DERIVADOR_SERVICE_URL, json=payload, timeout=5)
         resp.raise_for_status()
@@ -355,9 +296,8 @@ def derivar_a_operador(payload: dict):
     except RequestException as e:
         logger.error(f"Error derivando a operador: {str(e)}")
 
-# --- Procesamiento de imágenes ----------------------------------------------
+# --- Procesamiento de imágenes -----------------------------------------------
 def compress_image(img_bytes: bytes) -> bytes:
-    """Comprime una imagen para reducir el tamaño antes de enviarla al OCR."""
     try:
         img = Image.open(io.BytesIO(img_bytes))
         img = img.resize((1024, 1024), Image.Resampling.LANCZOS)
@@ -370,41 +310,38 @@ def compress_image(img_bytes: bytes) -> bytes:
 
 @retry(stop=stop_after_attempt(3), wait=wait_fixed(2))
 def call_ocr_service(image_b64: str) -> dict:
-    """Llama al servicio de OCR para extraer texto de una imagen."""
     resp = requests.post(OCR_SERVICE_URL, json={"image_base64": image_b64}, timeout=10)
     resp.raise_for_status()
     return resp.json()
 
-# --- Lógica de OpenAI ------------------------------------------------------
+# --- Lógica de OpenAI --------------------------------------------------------
 def get_instrucciones_estudios(estudios_list: list) -> str:
-    """Obtiene instrucciones de ayuno y recolección de orina, usando caché."""
     cache_key = f"instrucciones:{hash(','.join(sorted(estudios_list)))}"
     cached = redis_client.get(cache_key)
     if cached:
         return cached
-
     prompt = f"""
 Estos son los estudios solicitados: {', '.join(estudios_list)}.
 Eres un asistente de laboratorio especializado en indicar ayuno y recolección de orina. Tu tarea:
 
-1. **Ayuno para estudios de sangre**  
-   - Por defecto “Ayuno de 8 horas”.  
-   - Si alguno forma parte de un perfil **lipídico** (colesterol total, HDL, LDL, triglicéridos…), **hepático** (AST, ALT, fosfatasa alcalina, bilirrubinas…) u **hormonal** (TSH, T4 libre, cortisol, estradiol…), entonces “Ayuno de 12 horas”.  
+1. **Ayuno para estudios de sangre**
+   - Por defecto “Ayuno de 8 horas”.
+   - Si alguno forma parte de un perfil **lipídico** (colesterol total, HDL, LDL, triglicéridos…), **hepático** (AST, ALT, fosfatasa alcalina, bilirrubinas…) u **hormonal** (TSH, T4 libre, cortisol, estradiol…), entonces “Ayuno de 12 horas”.
    - **Excepción**: para “Pirens” (y cualquier estudio similar en orina de 24 h con componente sanguíneo), se aplica **“Ayuno de 8 horas”**.
 
-2. **Recolección para estudios de orina**  
-   - Si hay análisis de **microalbuminuria** **sin** mención de “espontánea” ni “primera orina”, o cualquier “clearance” o “depuración” renal (p. ej. “clearance de creatinina”), o “Pirens”, o “recolección de orina de 24 horas”:  
-     → **“Recolectar orina de 24 horas”**.  
-   - Si hay “microalbuminuria en orina espontánea” o “primera orina de la mañana” o “orina matutina”, o “sedimento urinario” o las siglas **O-C**:  
+2. **Recolección para estudios de orina**
+   - Si hay análisis de **microalbuminuria** **sin** mención de “espontánea” ni “primera orina”, o cualquier “clearance” o “depuración” renal (p. ej. “clearance de creatinina”), o “Pirens”, o “recolección de orina de 24 horas”:
+     → **“Recolectar orina de 24 horas”**.
+   - Si hay “microalbuminuria en orina espontánea” o “primera orina de la mañana” o “orina matutina”, o “sedimento urinario” o las siglas **O-C**:
      → **“Recolectar primera orina de la mañana”**.
 
-3. **Salida final**  
-   Al terminar el análisis, **entrega solo dos líneas**:  
-   1. **Ayuno de sangre**:  
-      - Si hay estudios de sangre, indica “Ayuno de X horas” (8 o 12).  
-      - Si **no** hay estudios de sangre, indica “No requiere ayuno”.  
-   2. **Recolección de orina**:  
-      - Si hay estudios de orina, indica “Recolectar Y” donde Y es “primera orina de la mañana” y/o “orina de 24 horas” (si aplican ambas, sepáralas con “ y ”).  
+3. **Salida final**
+   Al terminar el análisis, **entrega solo dos líneas**:
+   1. **Ayuno de sangre**:
+      - Si hay estudios de sangre, indica “Ayuno de X horas” (8 o 12).
+      - Si **no** hay estudios de sangre, indica “No requiere ayuno”.
+   2. **Recolección de orina**:
+      - Si hay estudios de orina, indica “Recolectar Y” donde Y es “primera orina de la mañana” y/o “orina de 24 horas” (si aplican ambas, sepáralas con “ y ”).
       - Si **no** hay estudios de orina, indica “No requiere recolección de orina”.
 """
     try:
@@ -420,9 +357,8 @@ Eres un asistente de laboratorio especializado en indicar ayuno y recolección d
         logger.error(f"Error OpenAI: {str(e)}")
         return "No pude obtener indicaciones específicas. Por favor, consulta al laboratorio."
 
-# --- Lógica central de ALIA -------------------------------------------------
+# --- Lógica central de ALIA --------------------------------------------------
 def handle_esperando_orden(from_number: str, content: str, paciente: dict) -> str:
-    """Maneja el estado esperando_orden (texto o imagen)."""
     if content.strip().lower() in ("no", "no tengo orden"):
         paciente["estado"] = BotState.ESPERANDO_ESTUDIOS_MANUAL.value
         save_paciente(from_number, paciente)
@@ -430,7 +366,6 @@ def handle_esperando_orden(from_number: str, content: str, paciente: dict) -> st
     return "Por favor envía la foto de tu orden médica o responde 'no' para continuar sin orden."
 
 def handle_estudios_manual(from_number: str, content: str, paciente: dict) -> str:
-    """Maneja el ingreso manual de estudios."""
     estudios_raw = content.strip()
     paciente["estudios"] = [e.strip() for e in estudios_raw.split(",")]
     paciente["estado"] = BotState.ESPERANDO_ESTUDIOS_CONFIRMACION.value
@@ -439,7 +374,6 @@ def handle_estudios_manual(from_number: str, content: str, paciente: dict) -> st
     return f"Hemos recibido estos estudios: {estudios_str}.\n¿Los confirmas? (sí/no)"
 
 def handle_estudios_confirmacion(from_number: str, content: str, paciente: dict) -> str:
-    """Maneja la confirmación de estudios."""
     txt = content.strip().lower()
     if txt in ("sí", "si", "s"):
         estudios_list = paciente["estudios"]
@@ -470,7 +404,6 @@ def handle_estudios_confirmacion(from_number: str, content: str, paciente: dict)
     return "Entendido. Por favor, vuelve a escribir los estudios solicitados:"
 
 def handle_menu(from_number: str, content: str, paciente: dict) -> str:
-    """Maneja el menú principal."""
     txt = content.strip().lower()
     if txt == "1" or "turno" in txt:
         paciente["estado"] = BotState.MENU_TURNO.value
@@ -487,7 +420,6 @@ def handle_menu(from_number: str, content: str, paciente: dict) -> str:
     return "Opción no válida. Elige 1, 2 o 3."
 
 def handle_menu_turno(from_number: str, content: str, paciente: dict) -> str:
-    """Maneja la selección de tipo de turno."""
     txt = content.strip().lower()
     if txt == "1" or "sede" in txt:
         paciente["tipo_atencion"] = "SEDE"
@@ -500,7 +432,6 @@ def handle_menu_turno(from_number: str, content: str, paciente: dict) -> str:
     return pregunta
 
 def handle_datos_secuenciales(from_number: str, content: str, paciente: dict) -> str:
-    """Maneja los datos secuenciales para turnos."""
     campo = paciente["estado"].split("_", 1)[1]
     if campo == "fecha_nacimiento" and not validate_fecha_nacimiento(content):
         return "Formato de fecha inválido (dd/mm/aaaa). Intenta de nuevo:"
@@ -516,7 +447,6 @@ def handle_datos_secuenciales(from_number: str, content: str, paciente: dict) ->
     return "Envía foto de tu orden médica o responde 'no' para continuar sin orden."
 
 def handle_resultados(from_number: str, content: str, paciente: dict) -> str:
-    """Maneja el flujo de solicitud de resultados."""
     campo = paciente["estado"].split("_", 1)[1]
     if campo == "nombre":
         paciente["nombre"] = content.title()
@@ -539,7 +469,6 @@ def handle_resultados(from_number: str, content: str, paciente: dict) -> str:
         return msg
 
 def handle_image(from_number: str, content: str, paciente: dict) -> str:
-    """Procesa una imagen de orden médica."""
     try:
         compressed_img = compress_image(base64.b64decode(content))
         compressed_b64 = base64.b64encode(compressed_img).decode()
@@ -547,7 +476,6 @@ def handle_image(from_number: str, content: str, paciente: dict) -> str:
         texto_ocr = ocr_data.get("text", "").strip()
         if not texto_ocr:
             return "No pudimos procesar tu orden médica."
-
         prompt = f"Analiza esta orden médica y devuelve un JSON con las claves:\nestudios, cobertura, afiliado.\n\n{texto_ocr}"
         resp = openai_client.chat.completions.create(
             model="gpt-4",
@@ -555,7 +483,6 @@ def handle_image(from_number: str, content: str, paciente: dict) -> str:
             temperature=0.0
         )
         datos = json.loads(resp.choices[0].message.content.strip())
-
         paciente.update({
             "estudios": datos.get("estudios"),
             "cobertura": datos.get("cobertura"),
@@ -573,7 +500,6 @@ def handle_image(from_number: str, content: str, paciente: dict) -> str:
         return "Error interpretando tu orden médica."
 
 def procesar_mensaje_alia(from_number: str, tipo: str, contenido: str) -> str:
-    """Procesa un mensaje entrante y devuelve la respuesta del bot."""
     paciente = get_paciente(from_number)
     estado = BotState(paciente.get("estado") or BotState.NONE.value)
     txt = contenido.strip().lower()
@@ -603,10 +529,11 @@ def procesar_mensaje_alia(from_number: str, tipo: str, contenido: str) -> str:
             return handle_estudios_confirmacion(from_number, contenido, paciente)
         if estado in [BotState.ESPERANDO_RESULTADOS_NOMBRE, BotState.ESPERANDO_RESULTADOS_DNI, BotState.ESPERANDO_RESULTADOS_LOCALIDAD]:
             return handle_resultados(from_number, contenido, paciente)
-        if estado in [BotState.ESPERANDO_NOMBRE, BotState.ESPERANDO_DIRECCION, BotState.ESPERANDO_LOCALIDAD, 
-                      BotState.ESPERANDO_FECHA_NACIMIENTO, BotState.ESPERANDO_COBERTURA, BotState.ESPERANDO_AFILIADO]:
+        if estado in [
+            BotState.ESPERANDO_NOMBRE, BotState.ESPERANDO_DIRECCION, BotState.ESPERANDO_LOCALIDAD,
+            BotState.ESPERANDO_FECHA_NACIMIENTO, BotState.ESPERANDO_COBERTURA, BotState.ESPERANDO_AFILIADO
+        ]:
             return handle_datos_secuenciales(from_number, contenido, paciente)
-        
         # Fallback para preguntas libres
         prompt = (
             f"Paciente: {paciente.get('nombre', '')} "
@@ -629,10 +556,9 @@ def procesar_mensaje_alia(from_number: str, tipo: str, contenido: str) -> str:
 
     return "No pude procesar tu mensaje."
 
-# --- Webhook WhatsApp (verificación y eventos) ------------------------------
+# --- Webhook WhatsApp (verificación y eventos) -------------------------------
 @app.route("/webhook", methods=["GET", "POST"])
 def webhook_whatsapp():
-    """Maneja eventos y verificaciones del webhook de WhatsApp."""
     if request.method == "GET":
         mode = request.args.get("hub.mode")
         token = request.args.get("hub.verify_token")
@@ -682,25 +608,21 @@ def webhook_whatsapp():
 
     return Response("OK", status=200)
 
-# --- Widget & página de ejemplo ---------------------------------------------
+# --- Widget & página de ejemplo ----------------------------------------------
 @app.route("/widget.js")
 def serve_widget():
-    """Sirve el archivo widget.js."""
     return send_from_directory(app.static_folder, "widget.js")
 
 @app.route("/", methods=["GET"])
 def serve_index():
-    """Sirve la página principal."""
     return send_from_directory(app.static_folder, "index.html")
 
 @app.route("/chat", methods=["GET"])
 def serve_chat():
-    """Sirve la página de chat."""
     return send_from_directory(app.static_folder, "chat.html")
 
 @app.route("/chat", methods=["POST"])
 def api_chat():
-    """Maneja solicitudes de chat desde el widget."""
     data = request.get_json(force=True)
     session = data.get("session", "demo")
     if "image" in data and (data["image"].startswith("iVBOR") or data["image"].startswith("/9j/")):
@@ -710,7 +632,7 @@ def api_chat():
         reply = procesar_mensaje_alia(session, "text", msg)
     return jsonify({"reply": reply})
 
-# --- Ejecución del servidor ------------------------------------------------
+# --- Ejecución del servidor --------------------------------------------------
 if __name__ == "__main__":
     puerto = int(os.getenv("PORT", 10000))
     app.run(host="0.0.0.0", port=puerto)
