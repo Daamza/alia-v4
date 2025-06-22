@@ -15,98 +15,6 @@ import io
 import re
 import gspread
 from google.oauth2.service_account import Credentials
-
-# --- Configuración de entorno ------------------------------------------------
-META_VERIFY_TOKEN     = os.getenv("META_VERIFY_TOKEN")
-META_ACCESS_TOKEN     = os.getenv("META_ACCESS_TOKEN")
-META_PHONE_NUMBER_ID  = os.getenv("META_PHONE_NUMBER_ID")
-OPENAI_API_KEY        = os.getenv("OPENAI_API_KEY")
-REDIS_URL             = os.getenv("REDIS_URL")
-GOOGLE_CREDS_B64      = os.getenv("GOOGLE_CREDS_B64")
-OCR_SERVICE_URL       = os.getenv("OCR_SERVICE_URL", "https://ocr-microsistema.onrender.com/ocr")
-DERIVADOR_SERVICE_URL = os.getenv("DERIVADOR_SERVICE_URL", "https://derivador-service-onrender.com/derivar")
-GOOGLE_SHEET_NAME     = os.getenv("GOOGLE_SHEET_NAME", "ALIA_Bot_Data")
-
-# --- Lista de feriados (actualizar según 2025 en Argentina) ------------------
-FERIADOS_2025 = [
-    "2025-01-01", "2025-03-03", "2025-03-04", "2025-03-24", "2025-04-02",
-    "2025-04-17", "2025-04-18", "2025-05-01", "2025-05-25", "2025-06-20",
-    "2025-07-09", "2025-08-17", "2025-10-12", "2025-11-20", "2025-12-08", "2025-12-25"
-]
-
-# --- Inicialización de logging -----------------------------------------------
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
-logger = logging.getLogger(__name__)
-
-# --- Inicialización de clientes ----------------------------------------------
-openai.api_key    = OPENAI_API_KEY
-redis_client      = redis.from_url(REDIS_URL, decode_responses=True)
-app               = Flask(__name__, static_folder="static")
-
-# --- Inicialización de Google Sheets -----------------------------------------
-def init_google_sheets():
-    try:
-        creds_json = json.loads(base64.b64decode(GOOGLE_CREDS_B64))
-        scopes = [
-            "https://www.googleapis.com/auth/spreadsheets",
-            "https://www.googleapis.com/auth/drive"
-        ]
-        creds = Credentials.from_service_account_info(creds_json, scopes=scopes)
-        client = gspread.authorize(creds)
-        return client
-    except Exception as e:
-        logger.error(f"Error inicializando Google Sheets: {e}")
-        raise
-
-sheets_client = init_google_sheets()
-
-# --- Gestión de Google Sheets por mes y día ----------------------------------
-def get_monthly_sheet(date: datetime, sheet_type: str) -> gspread.Spreadsheet:
-    sheet_name = f"{sheet_type}_{date.strftime('%Y-%m')}"
-    try:
-        sheet = sheets_client.open(sheet_name)
-    except gspread.exceptions.SpreadsheetNotFound:
-        sheet = sheets_client.create(sheet_name)
-        sheet.share(None, perm_type="anyone", role="writer")
-        logger.info(f"Hoja mensual creada: {sheet_name}")
-    return sheet
-
-def get_daily_worksheet(date: datetime, sheet_type: str) -> gspread.Worksheet:
-    sheet = get_monthly_sheet(date, sheet_type)
-    tab_name = date.strftime("%Y-%m-%d")
-    try:
-        worksheet = sheet.worksheet(tab_name)
-    except gspread.exceptions.WorksheetNotFound:
-        worksheet = sheet.add_worksheet(title=tab_name, rows=100, cols=20)
-        headers = [
-            "Timestamp", "Nombre", "DNI", "Localidad", "Dirección",
-            "Fecha de Nacimiento", "Edad", "Cobertura", "Afiliado",
-            "Estudios", "Tipo de Atención"
-        ]
-        if sheet_type == "Sedes":
-            headers.append("Sede")
-        worksheet.append_row(headers)
-        logger.info(f"Pestaña creada: {tab_name} en {sheet.title}")
-    return worksheet
-
-def get_resultados_sheet() -> gspread.Worksheet:
-import os
-import json
-import base64
-import logging
-import requests
-import redis
-from datetime import datetime, timedelta
-from enum import Enum
-from flask import Flask, request, Response, send_from_directory, jsonify
-import openai
-from requests.exceptions import RequestException
-from tenacity import retry, stop_after_attempt, wait_fixed
-from PIL import Image
-import io
-import re
-import gspread
-from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
 
 # --- Configuración de entorno ------------------------------------------------
@@ -173,13 +81,12 @@ def mover_a_carpeta(sheet, folder_id, creds):
 # --- Gestión de Google Sheets por mes y día ----------------------------------
 def get_monthly_sheet(date: datetime, sheet_type: str) -> gspread.Spreadsheet:
     sheet_name = f"{sheet_type}_{date.strftime('%Y-%m')}"
-    folder_id = ALIA_FOLDER_ID
     try:
         sheet = sheets_client.open(sheet_name)
     except gspread.exceptions.SpreadsheetNotFound:
         sheet = sheets_client.create(sheet_name)
         sheet.share(None, perm_type="anyone", role="writer")
-        mover_a_carpeta(sheet, folder_id, sheets_creds)
+        mover_a_carpeta(sheet, ALIA_FOLDER_ID, sheets_creds)
         logger.info(f"Hoja mensual creada: {sheet_name}")
     return sheet
 
@@ -288,19 +195,18 @@ def get_next_business_day(date: datetime, localidad: str) -> tuple:
         "ituzaingo": [0], "merlo": [1,4], "padua": [1,4],
         "tesei": [2,5], "hurlingham": [2,5], "castelar": [3]
     }.get(loc, [0])
-    current_date = date
+    cd = date
     while True:
-        current_date += timedelta(days=1)
-        if current_date.weekday() == 6 or is_holiday(current_date):
+        cd += timedelta(days=1)
+        if cd.weekday() == 6 or is_holiday(cd):
             continue
-        if current_date.weekday() in target_days:
-            return current_date, current_date.strftime("%A").capitalize()
+        if cd.weekday() in target_days:
+            return cd, cd.strftime("%A").capitalize()
 
 def count_domicilio_patients(date: datetime) -> int:
     try:
         ws = get_daily_worksheet(date, "Domicilios")
-        records = ws.get_all_records()
-        return len(records)
+        return len(ws.get_all_records())
     except Exception as e:
         logger.error(f"Error contando pacientes en Domicilios {date}: {e}")
         return 0
@@ -351,15 +257,16 @@ def determinar_sede(localidad: str) -> tuple:
         return "TESEI","Concepción Arenal 2694"
     return "GENERAL","Nuestra sede principal"
 
-# --- Registro en Google Sheets -----------------------------------------------
+# --- Registro en Google Sheets ----------------------------------------------
 def registrar_turno(paciente: dict, date: datetime, sheet_type: str, sede: str=None):
     try:
         ws = get_daily_worksheet(date, sheet_type)
         ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        estudios_str = ", ".join(paciente["estudios"]) if isinstance(paciente["estudios"], list) else paciente["estudios"]
+        estudios = paciente.get("estudios") or []
+        estudios_str = ", ".join(estudios) if isinstance(estudios, list) else estudios
         row = [
             ts, paciente.get("nombre",""), paciente.get("dni",""),
-            paciente.get("localidad",""), paciente.get("direccion",""),
+            paciente.get("localidad",""), paciente.get("dirección",""),
             paciente.get("fecha_nacimiento",""), calcular_edad(paciente.get("fecha_nacimiento","")) or "",
             paciente.get("cobertura",""), paciente.get("afiliado",""),
             estudios_str, paciente.get("tipo_atencion","")
@@ -436,23 +343,10 @@ def get_instrucciones_estudios(estudios_list: list) -> str:
     if cached:
         return cached
 
-    prompt = f"""
-Estos son los estudios solicitados: {', '.join(estudios_list)}.
-Eres un asistente de laboratorio especializado en indicar ayuno y recolección de orina. Tu tarea:
-
-1. **Ayuno para estudios de sangre**
-   - Por defecto “Ayuno de 8 horas”.
-   - Si alguno forma parte de un perfil **lipídico**, **hepático** u **hormonal**, entonces “Ayuno de 12 horas”.
-   - Excepción para “Pirens”: “Ayuno de 8 horas”.
-
-2. **Recolección para estudios de orina**
-   - Si hay análisis de **microalbuminuria** sin “espontánea” o cualquier “clearance” renal: “Recolectar orina de 24 horas”.
-   - Si hay “primera orina de la mañana” o “sedimento urinario”: “Recolectar primera orina de la mañana”.
-
-3. **Salida final:**  
-   - Ayuno de sangre: “Ayuno de X horas” o “No requiere ayuno”.  
-   - Recolección de orina: “Recolectar Y” o “No requiere recolección de orina”.
-"""
+    prompt = (
+        f"Estos son los estudios solicitados: {', '.join(estudios_list)}.\n"
+        "Eres un asistente de laboratorio especializado en indicar ayuno y recolección de orina...\n"
+    )
     try:
         resp = openai.ChatCompletion.create(
             model="gpt-4",
@@ -475,21 +369,18 @@ def handle_esperando_orden(from_number: str, content: str, paciente: dict) -> st
     return "Por favor envía la foto de tu orden médica o responde 'no' para continuar sin orden."
 
 def handle_estudios_manual(from_number: str, content: str, paciente: dict) -> str:
-    paciente["estudios"] = [e.strip() for e in content.strip().split(",")]
+    paciente["estudios"] = [e.strip() for e in content.split(",")]
     paciente["estado"] = BotState.ESPERANDO_ESTUDIOS_CONFIRMACION.value
     save_paciente(from_number, paciente)
-    estudios_str = ", ".join(paciente["estudios"])
-    return f"Hemos recibido estos estudios: {estudios_str}.\n¿Los confirmas? (sí/no)"
+    return f"Hemos recibido estos estudios: {', '.join(paciente['estudios'])}.\n¿Los confirmas? (sí/no)"
 
 def handle_estudios_confirmacion(from_number: str, content: str, paciente: dict) -> str:
-    txt = content.strip().lower()
-    if txt in ("sí","si","s"):
-        estudios_list = paciente["estudios"]
-        instrucciones   = get_instrucciones_estudios(estudios_list)
-        localidad       = paciente.get("localidad","")
-        if paciente.get("tipo_atencion") == "SEDE":
+    if content.strip().lower() in ("sí","si","s"):
+        instrucciones = get_instrucciones_estudios(paciente["estudios"])
+        localidad, tipo = paciente.get("localidad",""), paciente.get("tipo_atencion")
+        if tipo == "SEDE":
             sede, dir_sede = determinar_sede(localidad)
-            date, dia     = determinar_dia_turno(localidad)
+            date, dia = determinar_dia_turno(localidad)
             registrar_turno(paciente, date, "Sedes", sede)
             final = (
                 f"El pre-ingreso se realizó correctamente.\n"
@@ -509,7 +400,7 @@ def handle_estudios_confirmacion(from_number: str, content: str, paciente: dict)
         return f"{instrucciones}\n\n{final}"
     paciente["estado"] = BotState.ESPERANDO_ESTUDIOS_MANUAL.value
     save_paciente(from_number, paciente)
-    return "Entendido. Por favor, vuelve a escribir los estudios solicitados:"
+    return "Entendido. Por favor, vuelve a escribir los estudios solicitados."
 
 def handle_menu(from_number: str, content: str, paciente: dict) -> str:
     txt = content.strip().lower()
@@ -521,7 +412,7 @@ def handle_menu(from_number: str, content: str, paciente: dict) -> str:
         paciente["estado"] = BotState.ESPERANDO_RESULTADOS_NOMBRE.value
         save_paciente(from_number, paciente)
         return "Para enviarte resultados, indícanos tu nombre completo:"
-    if txt == "3" or any(k in txt for k in ["operador","ayuda","asistente"]):
+    if "operador" in txt or "ayuda" in txt or "asistente" in txt:
         derivar_a_operador({"from_number": from_number, "paciente": paciente})
         clear_paciente(from_number)
         return "Te derivo a un operador. En breve te contactarán."
@@ -565,16 +456,12 @@ def handle_resultados(from_number: str, content: str, paciente: dict) -> str:
         paciente["dni"] = content.strip()
         paciente["estado"] = BotState.ESPERANDO_RESULTADOS_LOCALIDAD.value
         save_paciente(from_number, paciente)
-        return "Finalmente, indícanos tu localidad:"
+        return "Finalmente, indícanos tu localidad:" 
     if campo == "localidad":
         paciente["localidad"] = content.title()
-        msg = (
-            f"Solicitamos envío de resultados para {paciente['nombre']} "
-            f"({paciente['dni']}) en {paciente['localidad']}."
-        )
         registrar_resultado(paciente)
         clear_paciente(from_number)
-        return msg
+        return f"Solicitamos envío de resultados para {paciente['nombre']} ({paciente['dni']}) en {paciente['localidad']}."
 
 def handle_image(from_number: str, content: str, paciente: dict) -> str:
     try:
@@ -601,13 +488,10 @@ def handle_image(from_number: str, content: str, paciente: dict) -> str:
             "imagen_base64": content
         })
         save_paciente(from_number, paciente)
-        estudios_list = paciente["estudios"] or []
-        estudios_str = ", ".join(estudios_list) if isinstance(estudios_list,list) else estudios_list
         paciente["estado"] = BotState.ESPERANDO_ESTUDIOS_CONFIRMACION.value
-        save_paciente(from_number, paciente)
-        return f"Hemos detectado estos estudios: {estudios_str}.\n¿Los confirmas? (sí/no)"
-    except (RequestException, json.JSONDecodeError, openai.OpenAIError) as e:
-        logger.error(f"Error procesando imagen de {from_number}: {e}")
+        return f"Hemos detectado estos estudios: {', '.join(paciente['estudios'])}.\n¿Los confirmas? (sí/no)"
+    except Exception as e:
+        logger.error(f"Error procesando imagen: {e}")
         return "Error interpretando tu orden médica."
 
 def procesar_mensaje_alia(from_number: str, tipo: str, contenido: str) -> str:
@@ -651,21 +535,15 @@ def procesar_mensaje_alia(from_number: str, tipo: str, contenido: str) -> str:
         ]:
             return handle_datos_secuenciales(from_number, contenido, paciente)
 
-        # Fallback libre
-        prompt = (
-            f"Paciente: {paciente.get('nombre','')} "
-            f"(Edad {calcular_edad(paciente.get('fecha_nacimiento','')) or 'desconocida'})\n"
-            f"Pregunta: {contenido}\nResponde sólo si debe realizar ayuno o recolectar orina."
-        )
         try:
             resp = openai.ChatCompletion.create(
                 model="gpt-4",
-                messages=[{"role":"user","content":prompt}],
+                messages=[{"role":"user","content":f"Pregunta: {contenido}"}],
                 temperature=0.0
             )
             return resp.choices[0].message.content.strip()
-        except openai.OpenAIError as e:
-            logger.error(f"Error OpenAI en fallback: {e}")
+        except Exception as e:
+            logger.error(f"Error en fallback GPT: {e}")
             return "No entendí tu consulta, ¿podrías reformularla?"
 
     if tipo == "image" and estado == BotState.ESPERANDO_ORDEN:
@@ -690,17 +568,16 @@ def webhook_whatsapp():
 
     try:
         msg = data["entry"][0]["changes"][0]["value"]["messages"][0]
-    except (KeyError, IndexError):
-        logger.warning("Evento WhatsApp inválido: %s", data)
+    except Exception:
         return Response("Invalid event", status=400)
 
     from_nr = msg.get("from")
     tipo    = msg.get("type")
     if not from_nr or not tipo:
-        return Response("Missing required fields", status=400)
+        return Response("Missing fields", status=400)
 
     if tipo == "text":
-        txt  = msg.get("text",{}).get("body","")
+        txt = msg.get("text",{}).get("body","")
         rply = procesar_mensaje_alia(from_nr, "text", txt)
         enviar_mensaje_whatsapp(from_nr, rply)
     elif tipo == "image":
@@ -713,14 +590,12 @@ def webhook_whatsapp():
                 params={"access_token": META_ACCESS_TOKEN}, timeout=5
             ).json()
             url = meta.get("url")
-            if not url:
-                return Response("Invalid image URL", status=400)
             img = requests.get(url, timeout=10).content
             b64 = base64.b64encode(img).decode()
             rply = procesar_mensaje_alia(from_nr, "image", b64)
             enviar_mensaje_whatsapp(from_nr, rply)
-        except RequestException as e:
-            logger.error(f"Error procesando imagen de WhatsApp: {e}")
+        except Exception as e:
+            logger.error(f"Error imagen WhatsApp: {e}")
             return Response("Error processing image", status=400)
 
     return Response("OK", status=200)
