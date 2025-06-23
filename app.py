@@ -29,23 +29,23 @@ DERIVADOR_SERVICE_URL = os.getenv("DERIVADOR_SERVICE_URL", "https://derivador-se
 GOOGLE_SHEET_NAME     = os.getenv("GOOGLE_SHEET_NAME", "ALIA_Bot_Data")
 ALIA_FOLDER_ID        = "14UsGNIz6MBhQNd0gVFeSe3UPBNyB8yrk"
 
-# --- Lista de feriados (actualizar según 2025 en Argentina) ------------------
+# --- Lista de feriados (2025 Argentina) -------------------------------------
 FERIADOS_2025 = [
     "2025-01-01", "2025-03-03", "2025-03-04", "2025-03-24", "2025-04-02",
     "2025-04-17", "2025-04-18", "2025-05-01", "2025-05-25", "2025-06-20",
     "2025-07-09", "2025-08-17", "2025-10-12", "2025-11-20", "2025-12-08", "2025-12-25"
 ]
 
-# --- Inicialización de logging -----------------------------------------------
+# --- Logging ---------------------------------------------------------------
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
-# --- Inicialización de clientes ----------------------------------------------
-openai.api_key    = OPENAI_API_KEY
-redis_client      = redis.from_url(REDIS_URL, decode_responses=True)
-app               = Flask(__name__, static_folder="static")
+# --- Clientes --------------------------------------------------------------
+openai.api_key   = OPENAI_API_KEY
+redis_client     = redis.from_url(REDIS_URL, decode_responses=True)
+app              = Flask(__name__, static_folder="static")
 
-# --- Inicialización de Google Sheets y Google Drive --------------------------
+# --- Google Sheets & Drive ------------------------------------------------
 def init_google_sheets():
     try:
         creds_json = json.loads(base64.b64decode(GOOGLE_CREDS_B64))
@@ -64,55 +64,115 @@ sheets_client, sheets_creds = init_google_sheets()
 
 def mover_a_carpeta(sheet, folder_id, creds):
     try:
-        drive_service = build("drive", "v3", credentials=creds)
+        drive = build("drive", "v3", credentials=creds)
         file_id = sheet.id
-import os import json import base64 import logging import requests import redis from datetime import datetime, timedelta from enum import Enum from flask import Flask, request, Response, send_from_directory, jsonify import openai from requests.exceptions import RequestException from tenacity import retry, stop_after_attempt, wait_fixed from PIL import Image import io import re import gspread from google.oauth2.service_account import Credentials from googleapiclient.discovery import build
+        meta = drive.files().get(fileId=file_id, fields='parents').execute()
+        prev = ",".join(meta.get('parents', []))
+        drive.files().update(
+            fileId=file_id,
+            addParents=folder_id,
+            removeParents=prev,
+            fields='id, parents'
+        ).execute()
+        logger.info(f"Sheet movido a carpeta: {folder_id}")
+    except Exception as e:
+        logger.error(f"Error moviendo sheet: {e}")
 
---- Configuración de entorno ------------------------------------------------
+# --- Creación de hojas mensuales y diarias ---------------------------------
+def get_monthly_sheet(date: datetime, sheet_type: str) -> gspread.Spreadsheet:
+    name = f"{sheet_type}_{date.strftime('%Y-%m')}"
+    try:
+        return sheets_client.open(name)
+    except gspread.exceptions.SpreadsheetNotFound:
+        sheet = sheets_client.create(name)
+        sheet.share(None, perm_type="anyone", role="writer")
+        mover_a_carpeta(sheet, ALIA_FOLDER_ID, sheets_creds)
+        logger.info(f"Hoja mensual creada: {name}")
+        return sheet
 
-META_VERIFY_TOKEN     = os.getenv("META_VERIFY_TOKEN") META_ACCESS_TOKEN     = os.getenv("META_ACCESS_TOKEN") META_PHONE_NUMBER_ID  = os.getenv("META_PHONE_NUMBER_ID") OPENAI_API_KEY        = os.getenv("OPENAI_API_KEY") REDIS_URL             = os.getenv("REDIS_URL") GOOGLE_CREDS_B64      = os.getenv("GOOGLE_CREDS_B64") OCR_SERVICE_URL       = os.getenv("OCR_SERVICE_URL", "https://ocr-microsistema.onrender.com/ocr") DERIVADOR_SERVICE_URL = os.getenv("DERIVADOR_SERVICE_URL", "https://derivador-service-onrender.com/derivar") GOOGLE_SHEET_NAME     = os.getenv("GOOGLE_SHEET_NAME", "ALIA_Bot_Data") ALIA_FOLDER_ID        = "14UsGNIz6MBhQNd0gVFeSe3UPBNyB8yrk"
+def get_daily_worksheet(date: datetime, sheet_type: str) -> gspread.Worksheet:
+    sheet = get_monthly_sheet(date, sheet_type)
+    tab = date.strftime("%Y-%m-%d")
+    try:
+        return sheet.worksheet(tab)
+    except gspread.exceptions.WorksheetNotFound:
+        ws = sheet.add_worksheet(title=tab, rows=100, cols=25)
+        headers = [
+            "Timestamp", "Nombre", "DNI", "Localidad", "Dirección",
+            "Fecha de Nacimiento", "Edad", "Cobertura", "Afiliado",
+            "Estudios", "Tipo de Atención"
+        ]
+        if sheet_type == "Sedes":
+            headers.append("Sede")
+        elif sheet_type == "Domicilios":
+            headers.append("Domicilio")
+        ws.append_row(headers)
+        logger.info(f"Pestaña creada: {tab} en {sheet.title}")
+        return ws
 
---- Lista de feriados (2025 Argentina) -------------------------------------
+def get_resultados_sheet() -> gspread.Worksheet:
+    try:
+        book = sheets_client.open(GOOGLE_SHEET_NAME)
+        try:
+            return book.worksheet("Resultados")
+        except gspread.exceptions.WorksheetNotFound:
+            ws = book.add_worksheet(title="Resultados", rows=100, cols=20)
+            ws.append_row(["Timestamp", "Nombre", "DNI", "Localidad"] )
+            return ws
+    except gspread.exceptions.SpreadsheetNotFound:
+        book = sheets_client.create(GOOGLE_SHEET_NAME)
+        book.share(None, perm_type="anyone", role="writer")
+        mover_a_carpeta(book, ALIA_FOLDER_ID, sheets_creds)
+        ws = book.add_worksheet(title="Resultados", rows=100, cols=20)
+        ws.append_row(["Timestamp", "Nombre", "DNI", "Localidad"] )
+        return ws
 
-FERIADOS_2025 = [ "2025-01-01", "2025-03-03", "2025-03-04", "2025-03-24", "2025-04-02", "2025-04-17", "2025-04-18", "2025-05-01", "2025-05-25", "2025-06-20", "2025-07-09", "2025-08-17", "2025-10-12", "2025-11-20", "2025-12-08", "2025-12-25" ]
+# --- Estados del bot -------------------------------------------------------
+class BotState(Enum):
+    NONE                           = None
+    MENU                           = "menu"
+    MENU_TURNO                     = "menu_turno"
+    ESPERANDO_NOMBRE               = "esperando_nombre"
+    ESPERANDO_DIRECCION            = "esperando_direccion"
+    ESPERANDO_LOCALIDAD            = "esperando_localidad"
+    ESPERANDO_FECHA_NACIMIENTO     = "esperando_fecha_nacimiento"
+    ESPERANDO_COBERTURA            = "esperando_cobertura"
+    ESPERANDO_AFILIADO             = "esperando_afiliado"
+    ESPERANDO_ORDEN                = "esperando_orden"
+    ESPERANDO_ESTUDIOS_MANUAL      = "esperando_estudios_manual"
+    ESPERANDO_ESTUDIOS_CONFIRMACION= "esperando_estudios_confirmacion"
+    ESPERANDO_RESULTADOS_NOMBRE    = "esperando_resultados_nombre"
+    ESPERANDO_RESULTADOS_DNI       = "esperando_resultados_dni"
+    ESPERANDO_RESULTADOS_LOCALIDAD = "esperando_resultados_localidad"
 
---- Logging ---------------------------------------------------------------
+# --- Funciones de sesión y Redis -------------------------------------------
+def get_paciente(tel: str) -> dict:
+    data = redis_client.get(f"paciente:{tel}")
+    if data:
+        return json.loads(data)
+    paciente = {
+        "estado": None,
+        "tipo_atencion": None,
+        "nombre": None,
+        "direccion": None,
+        "localidad": None,
+        "fecha_nacimiento": None,
+        "cobertura": None,
+        "afiliado": None,
+        "estudios": None,
+        "imagen_base64": None,
+        "dni": None
+    }
+    save_paciente(tel, paciente)
+    return paciente
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s") logger = logging.getLogger(name)
+def save_paciente(tel: str, info: dict):
+    redis_client.set(f"paciente:{tel}", json.dumps(info), ex=86400)
 
---- Clientes --------------------------------------------------------------
+def clear_paciente(tel: str):
+    redis_client.delete(f"paciente:{tel}")
 
-openai.api_key   = OPENAI_API_KEY redis_client     = redis.from_url(REDIS_URL, decode_responses=True) app              = Flask(name, static_folder="static")
-
---- Google Sheets & Drive ------------------------------------------------
-
-def init_google_sheets(): try: creds_json = json.loads(base64.b64decode(GOOGLE_CREDS_B64)) scopes = [ "https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive" ] creds = Credentials.from_service_account_info(creds_json, scopes=scopes) client = gspread.authorize(creds) return client, creds except Exception as e: logger.error(f"Error inicializando Google Sheets: {e}") raise
-
-sheets_client, sheets_creds = init_google_sheets()
-
-def mover_a_carpeta(sheet, folder_id, creds): try: drive = build("drive", "v3", credentials=creds) file_id = sheet.id meta = drive.files().get(fileId=file_id, fields='parents').execute() prev = ",".join(meta.get('parents', [])) drive.files().update( fileId=file_id, addParents=folder_id, removeParents=prev, fields='id, parents' ).execute() logger.info(f"Sheet movido a carpeta: {folder_id}") except Exception as e: logger.error(f"Error moviendo sheet: {e}")
-
---- Creación de hojas mensuales y diarias ---------------------------------
-
-def get_monthly_sheet(date: datetime, sheet_type: str) -> gspread.Spreadsheet: name = f"{sheet_type}_{date.strftime('%Y-%m')}" try: return sheets_client.open(name) except gspread.exceptions.SpreadsheetNotFound: sheet = sheets_client.create(name) sheet.share(None, perm_type="anyone", role="writer") mover_a_carpeta(sheet, ALIA_FOLDER_ID, sheets_creds) logger.info(f"Hoja mensual creada: {name}") return sheet
-
-def get_daily_worksheet(date: datetime, sheet_type: str) -> gspread.Worksheet: sheet = get_monthly_sheet(date, sheet_type) tab = date.strftime("%Y-%m-%d") try: return sheet.worksheet(tab) except gspread.exceptions.WorksheetNotFound: ws = sheet.add_worksheet(title=tab, rows=100, cols=20) headers = [ "Timestamp", "Nombre", "DNI", "Localidad", "Dirección", "Fecha de Nacimiento", "Edad", "Cobertura", "Afiliado", "Estudios", "Tipo de Atención" ] if sheet_type == "Sedes": headers.append("Sede") elif sheet_type == "Domicilios": headers.append("Domicilio") ws.append_row(headers) logger.info(f"Pestaña creada: {tab} en {sheet.title}") return ws
-
-def get_resultados_sheet() -> gspread.Worksheet: try: book = sheets_client.open(GOOGLE_SHEET_NAME) try: return book.worksheet("Resultados") except gspread.exceptions.WorksheetNotFound: ws = book.add_worksheet(title="Resultados", rows=100, cols=20) ws.append_row(["Timestamp", "Nombre", "DNI", "Localidad"] ) return ws except gspread.exceptions.SpreadsheetNotFound: book = sheets_client.create(GOOGLE_SHEET_NAME) book.share(None, perm_type="anyone", role="writer") mover_a_carpeta(book, ALIA_FOLDER_ID, sheets_creds) ws = book.add_worksheet(title="Resultados", rows=100, cols=20) ws.append_row(["Timestamp", "Nombre", "DNI", "Localidad"] ) return ws
-
---- Estados del bot -------------------------------------------------------
-
-class BotState(Enum): NONE                           = None MENU                           = "menu" MENU_TURNO                     = "menu_turno" ESPERANDO_NOMBRE               = "esperando_nombre" ESPERANDO_DIRECCION            = "esperando_direccion" ESPERANDO_LOCALIDAD            = "esperando_localidad" ESPERANDO_FECHA_NACIMIENTO     = "esperando_fecha_nacimiento" ESPERANDO_COBERTURA            = "esperando_cobertura" ESPERANDO_AFILIADO             = "esperando_afiliado" ESPERANDO_ORDEN                = "esperando_orden" ESPERANDO_ESTUDIOS_MANUAL      = "esperando_estudios_manual" ESPERANDO_ESTUDIOS_CONFIRMACION= "esperando_estudios_confirmacion" ESPERANDO_RESULTADOS_NOMBRE    = "esperando_resultados_nombre" ESPERANDO_RESULTADOS_DNI       = "esperando_resultados_dni" ESPERANDO_RESULTADOS_LOCALIDAD = "esperando_resultados_localidad"
-
---- Sesiones y Redis -----------------------------------------------------
-
-def get_paciente(tel: str) -> dict: data = redis_client.get(f"paciente:{tel}") if data: return json.loads(data) p = { "estado":None, "tipo_atencion":None, "nombre":None, "direccion":None, "localidad":None, "fecha_nacimiento":None, "cobertura":None, "afiliado":None, "estudios":None, "imagen_base64":None, "dni":None } save_paciente(tel, p) return p
-
-def save_paciente(tel: str, info: dict): redis_client.set(f"paciente:{tel}", json.dumps(info), ex=86400)
-
-def clear_paciente(tel: str): redis_client.delete(f"paciente:{tel}")
-
-# --- Utilidades generales ----------------------------------------------------
+# --- Utilidades generales --------------------------------------------------
 def calcular_edad(fecha_str: str) -> int:
     try:
         nac = datetime.strptime(fecha_str, "%d/%m/%Y")
@@ -138,41 +198,39 @@ def is_holiday(date: datetime) -> bool:
 
 def get_next_business_day(date: datetime, localidad: str) -> tuple:
     loc = (localidad or "").lower()
-    target_days = {
-        "ituzaingo": [0], "merlo": [1,4], "padua": [1,4],
-        "tesei": [2,5], "hurlingham": [2,5], "castelar": [3]
-    }.get(loc, [0])
-    cd = date
+    dias_map = { "ituzaingo":[0], "merlo":[1,4], "padua":[1,4], "tesei":[2,5], "hurlingham":[2,5], "castelar":[3] }
+    target = dias_map.get(loc, [0])
+    current = date
     while True:
-        cd += timedelta(days=1)
-        if cd.weekday() == 6 or is_holiday(cd):
+        current += timedelta(days=1)
+        if current.weekday() == 6 or is_holiday(current):
             continue
-        if cd.weekday() in target_days:
-            return cd, cd.strftime("%A").capitalize()
+        if current.weekday() in target:
+            return current, current.strftime("%A")
 
 def count_domicilio_patients(date: datetime) -> int:
     try:
         ws = get_daily_worksheet(date, "Domicilios")
         return len(ws.get_all_records())
     except Exception as e:
-        logger.error(f"Error contando pacientes en Domicilios {date}: {e}")
+        logger.error(f"Error contando domicilio: {e}")
         return 0
 
 def siguiente_campo_faltante(paciente: dict) -> str:
     pasos = [
         ("nombre", BotState.ESPERANDO_NOMBRE, "Por favor indícanos tu nombre completo:"),
-        ("direccion", BotState.ESPERANDO_DIRECCION, "Ahora indícanos tu domicilio (calle y altura):"),
+        ("direccion", BotState.ESPERANDO_DIRECCION, "Indica tu domicilio (calle y altura):"),
         ("localidad", BotState.ESPERANDO_LOCALIDAD, "¿En qué localidad vivís?"),
-        ("fecha_nacimiento", BotState.ESPERANDO_FECHA_NACIMIENTO, "Por favor indícanos tu fecha de nacimiento (dd/mm/aaaa):"),
+        ("fecha_nacimiento", BotState.ESPERANDO_FECHA_NACIMIENTO, "Fecha de nacimiento (dd/mm/aaaa):"),
         ("cobertura", BotState.ESPERANDO_COBERTURA, "¿Cuál es tu cobertura médica?"),
-        ("afiliado", BotState.ESPERANDO_AFILIADO, "¿Cuál es tu número de afiliado?")
+        ("afiliado", BotState.ESPERANDO_AFILIADO, "¿Número de afiliado? (alfanumérico)")
     ]
     for campo, estado, pregunta in pasos:
         if not paciente.get(campo):
             paciente["estado"] = estado.value
             return pregunta
     return None
-
+    
 def determinar_dia_turno(localidad: str) -> tuple:
     loc = (localidad or "").lower()
     today = datetime.today()
